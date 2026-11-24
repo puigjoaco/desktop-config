@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Portapapeles
+Comment=Historial por orden original de copia
+Exec=@BINARY@ --open
+Icon=edit-paste
+Terminal=false
+Categories=Utility;
+NoDisplay=true

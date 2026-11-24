@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN" "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<policyconfig>
+  <vendor>Clipboard Panel</vendor>
+  <action id="org.local.clipboard-panel.clear-history">
+    <description>Clear clipboard panel history</description>
+    <description xml:lang="es">Borrar el historial del panel del portapapeles</description>
+    <message>Clearing clipboard history requires your password</message>
+    <message xml:lang="es">Borrar todo el historial del portapapeles requiere tu contraseña</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>auth_self</allow_active>
+    </defaults>
+  </action>
+</policyconfig>

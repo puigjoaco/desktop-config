@@ -1,0 +1,21 @@
+[Unit]
+Description=Historial de portapapeles con orden de copia estable
+After=graphical-session.target
+PartOf=graphical-session.target
+Requisite=graphical-session.target
+
+[Service]
+Type=dbus
+BusName=org.local.ClipboardPanel
+Environment=QT_QPA_PLATFORM=wayland
+UnsetEnvironment=QT_WAYLAND_RECONNECT
+ExecStart=%h/.local/libexec/clipboard-panel --daemon
+Restart=on-failure
+RestartPreventExitStatus=2 3
+RestartSec=2
+TimeoutStartSec=10
+TimeoutStopSec=5
+UMask=0077
+
+[Install]
+WantedBy=graphical-session.target
