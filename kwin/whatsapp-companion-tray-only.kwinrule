@@ -1,0 +1,7 @@
+[whatsapp-companion-tray-only]
+Description=WhatsApp Companion: tray only
+skiptaskbar=true
+skiptaskbarrule=2
+wmclass=whatsapp-companion
+wmclasscomplete=false
+wmclassmatch=1
