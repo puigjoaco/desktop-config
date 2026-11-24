@@ -70,9 +70,13 @@ Print uses the same overlay action as Meta+Shift+S, so it has the same region se
 
 No annotations, editor or toolbar; no OCR, saving, sharing or notifications; no delay timer; no window, active-window, full-screen or single-monitor modes; no adjusting a selection after release; no recording; no cursor in the image. Spectacle covers those features when launched normally or through its other shortcuts.
 
-The clipboard image belongs to the daemon. Restarting or stopping `quick-region-overlay.service` drops the current screenshot; Klipper may then put an older history item back.
+Each capture includes KDE's `x-kde-force-image-copy` marker, as Spectacle does, so Klipper stores it as an image even with its default image-history setting. The decoded image is still offered immediately; encoding happens only when a clipboard client requests it. Klipper's history size limits how many captures and other clipboard items it retains; copying the same image again moves its existing entry to the top.
+
+The clipboard image belongs to the daemon until its offer is replaced or the service stops. Klipper retains the capture in history and can restore it after the daemon exits.
 
 ## Tests
+
+`clipboard-image.h` has a regression test for Klipper's explicit-copy marker, intact image pixels and deferred encoding.
 
 `selection-geometry.h`, `capture-checks.h` and `daemon-logic.h` contain pure decisions covered by their unit tests. The tests cover raw-buffer reasons, malformed-reply ordering, layout shape, multi-key `ShortcutStatus`, argument handling and the capture state machine. `tests/check-scripts.sh` runs `bash -n` and shellcheck; `tests/script-helpers-test.sh` tests per-key ownership, fixed-string matching, a recorded one-line qdbus array and the same format with several owners and quoted display names, recorded `shortcutKeys` replies (single, several, multi-key sequences, empty), whole-sequence key removal, failed or unreadable key queries (which stop the script instead of reading as no keys), that every sequence sent to KGlobalAccel is exactly `4` and four int32 chords and bad input never reaches `busctl`, the exact `busctl` arguments, adding Print to the daemon's keys, fresh-profile detection, exact fresh rollback including cleared and multi-key bindings, the handover decisions for every marker × launcher × Spectacle-Print combination and stock Spectacle Meta+Shift+S, the reset and Print-add decisions per daemon status, removing both of Spectacle's stock defaults, the recovery mode, the lock (which the Spectacle helper does not inherit), the shared exit handler, the re-login note, unit-state classification, launcher matching and multi-key status parsing.
 

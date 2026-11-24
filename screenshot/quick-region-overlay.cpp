@@ -30,6 +30,7 @@
 #include <KGlobalShortcutInfo>
 #include <KSystemClipboard>
 #include "capture-checks.h"
+#include "clipboard-image.h"
 #include "daemon-logic.h"
 #include "selection-geometry.h"
 #include <algorithm>
@@ -431,10 +432,7 @@ private:
         logLine(QStringLiteral("overlay-shown ms=%1 windows=%2").arg(timer.elapsed()).arg(windows.size()));
     }
     static void offerImage(const QImage &image) {
-        // The clipboard keeps the decoded image; KSystemClipboard encodes the format each paste client requests.
-        auto *mime = new QMimeData;
-        mime->setImageData(image);
-        KSystemClipboard::instance()->setMimeData(mime, QClipboard::Clipboard);
+        KSystemClipboard::instance()->setMimeData(ClipboardImage::mimeData(image), QClipboard::Clipboard);
     }
     void finishSelection() {
         const QRect clipped = selectionGlobal().intersected(virtualRect);
