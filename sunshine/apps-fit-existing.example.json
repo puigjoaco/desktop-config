@@ -1,0 +1,15 @@
+{
+  "env": {},
+  "apps": [
+    {
+      "name": "Desktop",
+      "image-path": "desktop.png",
+      "prep-cmd": [
+        {
+          "do": "/home/joaquin/.local/libexec/sunshine/display-mode.py prepare",
+          "undo": "/home/joaquin/.local/libexec/sunshine/display-mode.py undo"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,31 @@
+[Unit]
+Description=Sunshine KMS host (available before desktop login)
+After=network.target systemd-user-sessions.service user@1000.service
+Wants=user@1000.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=joaquin
+Group=joaquin
+# Assigned only to this service; do not add the login user to input globally.
+SupplementaryGroups=input video render
+Environment=HOME=/home/joaquin
+Environment=XDG_CONFIG_HOME=/home/joaquin/.config
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
+Environment=WAYLAND_DISPLAY=wayland-0
+Environment=PULSE_SERVER=unix:/run/user/1000/pulse/native
+WorkingDirectory=/home/joaquin/.config/sunshine
+ExecStart=/usr/bin/sunshine /home/joaquin/.config/sunshine/sunshine.conf
+# Retry server failures; Sunshine also re-probes encoders on stream requests.
+Restart=always
+RestartSec=5
+TimeoutStopSec=15
+UMask=0077
+# The packaged binary grants these permitted capabilities. Sunshine confines
+# SYS_ADMIN to its DRM worker. No root application commands are provided.
+CapabilityBoundingSet=CAP_SYS_ADMIN CAP_SYS_NICE
+
+[Install]
+WantedBy=multi-user.target
