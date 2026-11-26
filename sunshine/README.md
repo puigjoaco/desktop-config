@@ -58,7 +58,7 @@ The installer now selects:
 
 ```ini
 virtual_display = enabled
-virtual_display_scale = 100
+virtual_display_scale = 150
 virtual_display_mode = exclusive
 virtual_display_restore_delay = 5
 ```
@@ -101,8 +101,9 @@ Disconnect starts a configurable grace period (five seconds by default) with
 the virtual output still alive and physical mirrors still enabled. A reconnect
 claims that same output and resizes its mode to the new request. This avoids a
 KWin hotplug transition, which can reload the remembered physical layout.
-Phone rotation therefore needs a client disconnect/reconnect with swapped
-physical dimensions; automatic Android reconnection is a separate client change.
+Native fullscreen in the companion Android fork follows phone orientation and
+quietly disconnects/reconnects with swapped physical dimensions. The host app
+keeps running during that transition.
 Sunshine exit/crash, initialization failure and emergency restore bypass grace.
 The independent guardian detects Sunshine's lost lifeline; `ExecStopPost` also
 covers crashes that kill the entire service process group. The original
@@ -366,3 +367,43 @@ do not revoke runtime permissions while another input application needs them.
 Optional deletion of task-created private files also removes pairing: the two
 `~/.config/sunshine*` directories, `~/.local/libexec/sunshine/`, and
 `~/.local/state/sunshine/` (if created). Nothing was committed or pushed.
+
+## Per-client desktop scale
+
+The Android companion fork sends `virtualDisplayScale` on both HTTPS `/launch`
+and `/resume`: Android `densityDpi / 240 * 100`, rounded to the nearest 25% and
+bounded to 100–400%. Auto maps 600 dpi to 250%, giving 576×1248 logical
+desktop pixels at 1440×3120 physical resolution. The Android **Desktop scale**
+setting can override Auto with 100–400% in 25% steps for the next connection.
+It leaves the physical native pixels unchanged. Sunshine
+passes the hint with that session into KWin output creation and retained-output
+resize. It never writes the global configuration or changes physical scales.
+
+Missing, malformed, or out-of-range hints fall back to `virtual_display_scale`.
+The installer uses **150%** as a moderate fallback for desktop/laptop clients;
+a high-density phone supplies its own larger value. Official Moonlight still
+works with the fallback; official Sunshine ignores the extra query parameter.
+No moonlight-common-c change or protocol-version negotiation is needed.
+
+The separate debug app is labeled `Moonlight Puig`. Select **Native fullscreen**
+in its resolution settings to enable orientation-following native pixels.
+Fixed resolution choices keep upstream orientation behavior. Android rotation
+lock is respected. A 250 ms debounce coalesces rapid rotations; a local stream
+stop finishes before a quiet activity recreation reconnects, without `/cancel`.
+
+### Temporary touch panel thickness
+
+The prepared exclusive-output helper enlarges only original, snapshotted panels
+while they are on the virtual output: `max(original thickness, 44,
+round(28 * output scale))` logical pixels. At the phone's 250% scale the usual
+44-pixel panel becomes **70 logical pixels** (175 stream pixels). This is an
+approximate touch target based on the client scale; physical millimeters are
+not measured. Larger original panels stay larger. Panel contents, position,
+alignment, length and hiding settings are not changed by this adjustment.
+
+The same snapshot saves each original thickness. Disconnect, crash, emergency
+and degraded recovery restore it, with separate durable progress markers so a
+later recovery retry cannot overwrite a user change made after thickness
+restoration completed. Panels created later without a saved thickness are not
+resized. This helper follow-up is prepared locally; its deployment/live check
+is separate from the earlier successful Android rotation check.

@@ -30,7 +30,7 @@ from pathlib import Path
 p=Path.home()/'.config/sunshine'
 s=p.joinpath('sunshine.conf').read_text()
 s='\n'.join(line for line in s.splitlines() if not line.lstrip().startswith(('virtual_display =','virtual_display_scale =','virtual_display_mode =','virtual_display_restore_delay =')))
-p.joinpath('sunshine-virtual.conf').write_text(s+'\nvirtual_display = enabled\nvirtual_display_scale = 100\nvirtual_display_mode = exclusive\nvirtual_display_restore_delay = 5\n')
+p.joinpath('sunshine-virtual.conf').write_text(s+'\nvirtual_display = enabled\nvirtual_display_scale = 150\nvirtual_display_mode = exclusive\nvirtual_display_restore_delay = 5\n')
 p.joinpath('sunshine-virtual.conf').chmod(0o600)
 PY
 sudo -n install -d -m 0755 /etc/systemd/system/sunshine-host.service.d

@@ -495,3 +495,196 @@ Logs: Sunshine's ignored `cmake-build-kwin/exclusive-review-fixes-build.log`,
 `exclusive-review-fixes-nested.log`, and `exclusive-staging-*.log`.
 No authoritative publishing review, commit, push or live supervised validation
 was performed by this implementation child.
+
+## Android native rotation and per-client scale — 2026-11-26
+
+Implemented, built and left uncommitted for orchestrator review. No live host
+redeployment or phone installation occurred in this pass.
+
+The companion Android fork (upstream revision `b48494cb`, branch
+`feat/portrait-rotation`) builds a separate `com.limelight.puig` debug APK,
+labeled **Moonlight Puig**. Native fullscreen selection follows the phone's
+orientation using native panel dimensions; fixed resolution choices keep
+upstream behavior. Android rotation lock is respected. Axis changes coalesce
+for 250 ms, stop only the stream, wait for native teardown, then quietly recreate
+the stream activity. The host app is never cancelled. Backgrounding during that
+transition cancels recreation. Same-axis and 180-degree changes do not reconnect.
+
+The Android HTTP layer sends `virtualDisplayScale` on both `/launch` and
+`/resume`: densityDpi / 240 as a percentage, rounded to a 25% step and clamped to
+100–400%. Sunshine strictly parses the integer and carries it through the launch
+session and RTSP capture configuration into KWin creation and retained-output
+resize. Missing or invalid values use the configured fallback. The installer
+now writes a moderate **150%** fallback for clients without a hint. The host's
+compiled compatibility default stays at 100%. Official Moonlight omits the
+parameter; official Sunshine ignores unknown query parameters. No native
+Moonlight library or submodule changes were necessary.
+
+Validation:
+
+- Android `testNonRootDebugUnitTest assembleNonRootDebug lintNonRootDebug`:
+  successful; **3 JVM tests passed**, lint completed without errors. Tests cover
+  density rounding/bounds, both physical orientations, and reconnect axis policy.
+  APK identity and label verified with `aapt`; all four upstream ABIs included.
+- Sunshine `heavy cmake --build cmake-build-kwin --parallel 12 --target sunshine
+  test_sunshine`: successful. Existing Boost Process deprecation warnings remain.
+- Focused KWin mode and client-scale checks: **7 tests passed**, including strict
+  scale parsing, invalid-value fallback and independent client selection. Old
+  gcov data produced checksum warnings after recompilation; test assertions passed.
+- Isolated nested KWin suite: **all functional assertions passed**, including
+  real PipeWire portrait frames, retaining the same output while switching from
+  the configured 100% fallback to a client 250% hint, logical desktop dimensions
+  576×1248 at 1440×3120 physical pixels, and unchanged global configuration.
+  The inner session exited 0. The outer harness exited 1 during temporary-directory
+  cleanup because an auto-started document portal's FUSE mount briefly returned
+  `ENOTCONN`. After its mount/processes exited, the task-owned residue was removed.
+  The harness source was not changed for that unrelated cleanup race.
+- Changed C++ clang-format, diff whitespace and installer shell syntax checks:
+  passed. Host monitors and recovery state were inspected read-only.
+
+Build/check logs and a copy of `Moonlight-Puig-debug.apk` are under
+`~/.cache/agent-scratch/moonlight/`. The APK also remains at the Android fork's
+`app/build/outputs/apk/nonRoot/debug/app-nonRoot-debug.apk`.
+
+Blocked real-device work: the designated phone had no advertised wireless ADB
+service or open debugging port; a direct legacy-port connection was refused.
+No other device or emulator was accessed. The official app was not modified.
+Installation, pairing, copying settings, phone screenshots, live rotation/grace
+timing, and removing the old phone-side UI XML remain pending Wireless debugging.
+No phone rotation setting was changed. No screenshot exists for this pass.
+The real host service/session was not restarted; its current configuration is
+unchanged. Both original physical connectors remain enabled in normal geometry,
+and no exclusive-layout snapshot was present.
+
+### Follow-up live device check
+
+The separate debug APK is now installed for Android user 0 and paired through
+Sunshine's local `/api/pin` endpoint. Admin credentials were consumed only by
+the request command and were never printed or saved in task files. The official
+Moonlight package remains installed and unchanged. The companion preferences
+match native fullscreen (3120×1440), 60 FPS, lowest-latency frame pacing,
+47 Mbps, trackpad touch, and remote-desktop mouse mode. Resolution, FPS,
+frame pacing and bitrate were inspected in the official settings UI; the two
+mouse options were applied as requested.
+
+Sunshine was redeployed with `use-virtual-build.sh` after checking the journal
+and idle server state. Only `sunshine-host.service` restarted. The deployed
+configuration fallback is 150%. A real portrait connection requested and captured
+**1440×3120 at 60 FPS, scale 3.75**, as recorded by the host journal. The phone
+reports logical density 600 dpi, so the client's measured 375% hint overrides
+that fallback correctly. A native portrait screenshot was captured under
+`~/.cache/agent-scratch/moonlight/portrait-start.png`; it contains the real shared
+desktop and remains outside Git.
+
+The phone changed to another foreground app before the rotation sequence, so
+that stream ended normally on backgrounding. A second controlled attempt also
+lost the foreground before connecting. Phone input was paused to avoid tapping
+another app. Landscape/reverse-portrait reconnect timing is **not yet verified**;
+no claim is made about a successful live orientation reconnect from these runs.
+
+The original `accelerometer_rotation`, `user_rotation` and temporary screen
+sleep timeout were restored. `/sdcard/sunshine-ui.xml` and the task's
+`/sdcard/moonlight-ui.xml` were removed. Readback verified both original host
+connectors enabled at their previous modes, positions, scale, rotation,
+priorities and replication state; no exclusive-layout snapshot remains.
+Logs and before/after layout JSON are outside Git under the same scratch path.
+A short hands-off phone window is needed to complete both rotation directions.
+
+### Final scale policy and successful rotation check
+
+Auto now uses **densityDpi / 240**, rounded to 25% steps and bounded to 100–400%.
+The initial 375% live measurement above used the earlier 160 dpi baseline and
+is superseded. The new baseline gives this 600 dpi client **250%**, with
+576×1248 logical pixels in native 1440×3120 portrait. The Android streaming
+settings now include **Desktop scale**: Auto (default), or explicit 100–400% in
+25% steps. A saved explicit choice applies on the next connection; invalid
+restored values safely fall back to Auto.
+
+Changed Android files for this adjustment: `NativeDisplayPolicy.java`,
+`NativeDisplayPolicyTest.java`, `preferences/PreferenceConfiguration.java`,
+`Game.java`, `res/xml/preferences.xml`, `res/values/arrays.xml`,
+`res/values/strings.xml`, and the fork README. Only default English resources
+were added. This deployment README and verification record describe the new
+policy. Sunshine's per-session transport/selection code required no further change.
+
+After the phone was left untouched, the rebuilt debug-signed update installed
+for user 0 and retained its pairing. `testNonRootDebugUnitTest`,
+`assembleNonRootDebug` and `lintNonRootDebug` passed: **5 JVM tests**, including
+600 dpi → 250%, rounding boundaries, bounds, every supported explicit override,
+and invalid saved values. A resource check confirmed Auto and all 13 explicit
+choices, with Auto as default.
+
+The live sequence completed successfully:
+
+- Portrait start: **1440×3120 @ 60 FPS, 250%**.
+- Landscape rotation: **3120×1440 @ 60 FPS, 250%**. The new client connected
+  0.233 seconds after the old disconnect; the requested mode was applied after
+  0.399 seconds, within the five-second grace.
+- Portrait rotation back: **1440×3120 @ 60 FPS, 250%**. The new connection
+  followed disconnect by 0.234 seconds; portrait mode applied after 0.354 seconds.
+- Both rotations reused the exact same virtual output and PipeWire node.
+  **40 KScreen samples**, approximately 150 ms apart, showed both physical
+  connectors continuously enabled and replicating that same virtual source.
+  The recovery snapshot remained present throughout; no intermediate physical
+  layout restoration was observed.
+- Phone screenshots after each change showed the desktop and bottom Plasma
+  panel, without a Moonlight dialog or app-list transition. Journal intervals
+  above measure control/mode events, not end-to-end visual latency.
+- Leaving the stream restored both physical connectors' original modes,
+  positions, scale, rotation, priority and replication state. No virtual output
+  or exclusive-layout snapshot remained. Original rotation and sleep-timeout
+  settings were read back successfully; temporary phone XML files were removed.
+  The resumed phone activity was verified as the Samsung Home launcher.
+
+The host logged its existing unknown-virtual-connector diagnostic and a PipeWire
+format reinitialization during each resize; frames resumed successfully after
+that expected capture reinitialization. No compositor/session restart occurred.
+
+Evidence outside Git under `~/.cache/agent-scratch/moonlight/`:
+`portrait-start.png`, `landscape-rotation.png`, `portrait-return.png`,
+`live-phone-journal.log`, `rotation-layout-samples.json`, the live-layout JSON
+files, and `android-scale-build.log`. The updated APK copy is
+`Moonlight-Puig-debug.apk`. All source/deployment changes remain uncommitted;
+no authoritative publishing review, commit or push was performed by this child.
+
+### Touch-sized panel follow-up — prepared, not deployed
+
+Only the helper's panel thickness behavior changed. Original panel thickness is
+saved with each panel ID/connector in the same durable exclusive snapshot.
+While those panels are on the virtual output, the helper sets
+`max(original thickness, 44, round(28 * output scale))` logical pixels: the
+usual 44-pixel panel becomes **70 at 250%**, or 175 stream pixels. This is a
+scale-based estimate in the requested 64–72 logical-pixel range, not a measured
+physical-DPI conversion. A larger original thickness is preserved, and panels
+created later without an original saved thickness are not resized. No contents,
+location, alignment, length or hiding settings are written by this adjustment.
+
+A separate `panel_recovery` stage records `restoring` before applying saved
+thickness and `exact` after verified readback. Normal disconnect, Sunshine/guardian
+crash, emergency and degraded-output recovery all restore thickness. Failed
+readback retains the snapshot while window/connector recovery still proceeds.
+Once thickness restoration completes durably, later placement/window recovery
+retries do not overwrite a subsequent user thickness adjustment. Older snapshots
+without thickness values preserve their existing recovery behavior.
+
+Files: Sunshine `src_assets/linux/assets/kwin-exclusive.py`,
+`tests/unit/platform/linux/test_kwin_exclusive.py`,
+`tests/integration/linux/kwin_exclusive_nested.py`, and `docs/configuration.md`;
+this deployment README and verification record. No Android change was needed.
+
+Validation: **23 pure guardian tests passed**; helper staging/build passed;
+the expanded **nested KWin suite exited 0**, including actual Plasma panel
+44→70 at 250%, original thickness in the snapshot, unchanged thickness across
+retained-output landscape/portrait, exact disconnect restore, parent EOF,
+guardian SIGKILL plus disk recovery, the three C++ lease recovery cases,
+manual emergency restore, degraded recovery, and preserving a later 52-pixel
+user choice across a completed-stage retry. Real capture/portrait PipeWire
+reconnect tests also remained green. Python syntax and diff whitespace checks
+passed. Logs: `~/.cache/agent-scratch/moonlight/panel-unit.log`,
+`panel-build.log`, and `panel-nested.log`.
+
+The nested session cleaned up successfully. This follow-up did not redeploy or
+restart the live host, change the live desktop/panels, or access the phone.
+A current hands-off phone window was not confirmed, so live verification of
+this particular thickness adjustment remains pending. Earlier Android rotation
+screenshots show the previous panel thickness. Changes remain uncommitted.
