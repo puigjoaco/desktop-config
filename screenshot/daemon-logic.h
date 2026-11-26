@@ -8,15 +8,60 @@
 #include <QStringList>
 #include <QtGlobal>
 #include <chrono>
+#include <functional>
+#include <linux/input.h>
 #include <optional>
 
 namespace DaemonLogic {
 
+// Copy/paste keys written straight into the keyboard the user is still holding the shortcut on. Releasing Alt, Meta,
+// Shift and the shortcut letters first means the app sees plain Ctrl+C/V while the fingers are still down; a key-up for
+// a key that is not down is dropped by the kernel. Ctrl is always pressed and released here, so no bare letter can be
+// typed if the user lets go of Ctrl meanwhile. The batch presses the Ctrl (and Shift) key the user is not holding: the
+// kernel can interleave a physical release between injected events, and releasing the other key cannot clear this one.
+// Keyboards report only changes, so the Alt/Shift keys the user was holding are pressed again at the end of the batch;
+// otherwise the next C/S/V while still holding Ctrl+Alt would reach the app as Ctrl+C/S/V.
+struct KeyEvent { quint16 type; quint16 code; qint32 value; };
+inline quint16 freeModifierKey(bool leftHeld, quint16 left, quint16 right) { return leftHeld ? right : left; }
+// Held keys the batch releases and then presses again: Alt and Shift. Meta is left released, since a lone
+// Meta press/release opens the launcher; Ctrl is never released by the batch.
+inline QList<quint16> restoredModifiers(const std::function<bool(int)> &down) {
+    QList<quint16> keys;
+    for (quint16 key : {KEY_LEFTALT, KEY_RIGHTALT, KEY_LEFTSHIFT, KEY_RIGHTSHIFT})
+        if (down(key)) keys.append(key);
+    return keys;
+}
+inline QList<KeyEvent> shortcutKeyEvents(bool copy, bool shift, quint16 ctrlKey = KEY_LEFTCTRL, quint16 shiftKey = KEY_LEFTSHIFT,
+                                         const QList<quint16> &heldModifiers = {}) {
+    QList<KeyEvent> events;
+    const auto add = [&events](quint16 type, quint16 code, qint32 value) { events.append({type, code, value}); };
+    for (quint16 key : {KEY_LEFTALT, KEY_RIGHTALT, KEY_LEFTMETA, KEY_RIGHTMETA, KEY_LEFTSHIFT, KEY_RIGHTSHIFT, KEY_C, KEY_V})
+        add(EV_KEY, key, 0);
+    add(EV_SYN, SYN_REPORT, 0);
+    add(EV_KEY, ctrlKey, 1);
+    if (shift) add(EV_KEY, shiftKey, 1);
+    add(EV_SYN, SYN_REPORT, 0);
+    const quint16 letter = copy ? KEY_C : KEY_V;
+    add(EV_KEY, letter, 1);
+    add(EV_SYN, SYN_REPORT, 0);
+    add(EV_KEY, letter, 0);
+    add(EV_SYN, SYN_REPORT, 0);
+    if (shift) add(EV_KEY, shiftKey, 0);
+    add(EV_KEY, ctrlKey, 0);
+    add(EV_SYN, SYN_REPORT, 0);
+    if (!heldModifiers.isEmpty()) {
+        for (quint16 key : heldModifiers) add(EV_KEY, key, 1);
+        add(EV_SYN, SYN_REPORT, 0);
+    }
+    return events;
+}
+
 // Only quick-region-overlay.service runs --daemon; --capture asks it for a capture over D-Bus.
-enum class Command { Capture, Daemon, Usage };
+enum class Command { Capture, Daemon, HoldClipboard, Usage };
 inline Command parseCommand(const QStringList &args) {
     if (args == QStringList{QStringLiteral("--capture")}) return Command::Capture;
     if (args == QStringList{QStringLiteral("--daemon")}) return Command::Daemon;
+    if (args.size() == 2 && args[0] == QLatin1String("--hold-clipboard") && !args[1].isEmpty()) return Command::HoldClipboard;
     return Command::Usage;
 }
 // Exit status for a usage error, and for "another daemon owns the name", which the unit's RestartPreventExitStatus

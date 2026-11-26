@@ -33,6 +33,8 @@
 #include "clipboard-image.h"
 #include "daemon-logic.h"
 #include "selection-geometry.h"
+#include "stack-controller.h"
+#include "stack-holder.h"
 #include <algorithm>
 #include <cerrno>
 #include <cmath>
@@ -101,6 +103,7 @@ class OverlayController final : public QObject {
     Q_CLASSINFO("D-Bus Interface", "org.local.QuickRegionOverlay")
 public:
     explicit OverlayController(QObject *parent = nullptr) : QObject(parent) {
+        stack.captureBusy = [this] { return flow.busy() || flow.overlayShown(); };
         connect(qApp, &QGuiApplication::screenAdded, this, [this](QScreen *) { layoutChanged(); });
         connect(qApp, &QGuiApplication::screenRemoved, this, [this](QScreen *) { layoutChanged(); });
         pollTimer.setTimerType(Qt::PreciseTimer);
@@ -132,20 +135,54 @@ public:
         liveKeys(&error);
         if (!error.isEmpty()) qCritical().noquote() << "shortcut-registration-error:" << error;
         logLine(QStringLiteral("shortcut-status %1").arg(ShortcutStatus()));
+        const QList<QString> names{QStringLiteral("stack-copy"), QStringLiteral("stack-capture"), QStringLiteral("stack-paste"), QStringLiteral("stack-clear")};
+        const QList<QString> labels{QStringLiteral("Copy to clipboard stack"), QStringLiteral("Capture region to clipboard stack"), QStringLiteral("Paste clipboard stack"), QStringLiteral("Clear clipboard stack")};
+        const QList<Qt::Key> keys{Qt::Key_C, Qt::Key_S, Qt::Key_V, Qt::Key_X};
+        for (int i = 0; i < names.size(); ++i) {
+            auto *item = new QAction(labels[i], this);
+            item->setObjectName(names[i]);
+            item->setProperty("componentName", QString::fromLatin1(shortcutComponent));
+            item->setProperty("componentDisplayName", QStringLiteral("Quick Region Overlay"));
+            item->setAutoRepeat(false);
+            connect(item, &QAction::triggered, this, [this, i] {
+                if (i == 1) { shortcutPressed(true); return; }
+                if (flow.busy() || flow.overlayShown()) { StackController::osd(QStringLiteral("Capture busy")); return; }
+                if (i == 0) stack.copy();
+                if (i == 2) stack.paste();
+                if (i == 3) stack.clear();
+            });
+            stackActions << item;
+            if (!KGlobalAccel::self()->setGlobalShortcut(item, {QKeySequence(Qt::CTRL | Qt::ALT | keys[i])}))
+                qCritical() << "shortcut-registration-error" << names[i];
+        }
+        logLine(QStringLiteral("stack-shortcut-status %1").arg(StackShortcutStatus().join(QStringLiteral("; "))));
     }
     // Called after the event loop ends (SIGTERM from systemctl stop or restart). Marks the action inactive so
     // KGlobalAccel stops reporting a dead daemon as active; unlike unregistering, this keeps the saved binding.
     void deactivateShortcut() {
-        if (!registered) return;
+        for (auto *item : stackActions) deactivateAction({QString::fromLatin1(shortcutComponent), item->objectName(), QStringLiteral("Quick Region Overlay"), item->text()});
+        if (registered) deactivateAction(actionId());
+    }
+    void shutdown() { stack.shutdown(); }
+    void deactivateAction(const QStringList &id) {
         auto message = QDBusMessage::createMethodCall(QStringLiteral("org.kde.kglobalaccel"), QStringLiteral("/kglobalaccel"), QStringLiteral("org.kde.KGlobalAccel"), QStringLiteral("setInactive"));
-        message << actionId();
+        message << id;
         const QDBusMessage reply = QDBusConnection::sessionBus().call(message, QDBus::Block, kglobalaccelTimeoutMs);
         if (reply.type() == QDBusMessage::ErrorMessage) qCritical().noquote() << "shortcut-deactivate-failed" << reply.errorMessage();
         else logLine(QStringLiteral("shortcut-deactivated"));
     }
 public slots:
     void Ping() {}
-    void Capture() { startCapture(false); }
+    void Capture() { if (stack.busy()) return; appendSelection = false; startCapture(false); }
+    QStringList StackShortcutStatus() const {
+        QStringList result;
+        for (auto *item : stackActions) {
+            QString error;
+            const auto keys = liveKeys(&error, {QString::fromLatin1(shortcutComponent), item->objectName(), QStringLiteral("Quick Region Overlay"), item->text()});
+            result << item->objectName() + QLatin1Char('=') + (error.isEmpty() ? DaemonLogic::shortcutStatus(keys, {}) : QStringLiteral("error:") + error);
+        }
+        return result;
+    }
     // For install.sh, from KGlobalAccel at call time: "registered:<keys>", "none" or "none:<owners of a default key>"
     // (DaemonLogic::shortcutStatus), or "error:<message>" when KGlobalAccel can't be asked. Calls queue until the
     // shortcut is registered, so the answer is never from before registration.
@@ -192,9 +229,9 @@ private:
     QStringList actionId() const { return {QString::fromLatin1(shortcutComponent), QString::fromLatin1(shortcutAction), QStringLiteral("Quick Region Overlay"), action ? action->text() : QString()}; }
     // The action's current keys as the KGlobalAccel server has them; error is set when the call fails. shortcutKeys
     // sends whole sequences as a(ai); the older shortcut method keeps only each sequence's first chord.
-    QList<QKeySequence> liveKeys(QString *error) const {
+    QList<QKeySequence> liveKeys(QString *error, const QStringList &id = {}) const {
         auto message = QDBusMessage::createMethodCall(QStringLiteral("org.kde.kglobalaccel"), QStringLiteral("/kglobalaccel"), QStringLiteral("org.kde.KGlobalAccel"), QStringLiteral("shortcutKeys"));
-        message << actionId();
+        message << (id.isEmpty() ? actionId() : id);
         const QDBusMessage reply = QDBusConnection::sessionBus().call(message, QDBus::Block, kglobalaccelTimeoutMs);
         if (reply.type() != QDBusMessage::ReplyMessage) { *error = reply.errorMessage().isEmpty() ? QStringLiteral("no reply") : reply.errorMessage(); return {}; }
         if (reply.signature() != QLatin1String("a(ai)")) { *error = QStringLiteral("unexpected shortcutKeys reply %1").arg(reply.signature()); return {}; }
@@ -212,12 +249,15 @@ private:
         return keys;
     }
     // A press of the shortcut. Unlike the D-Bus Capture method, it also closes an open overlay, like Escape.
-    void shortcutPressed() {
+    void shortcutPressed(bool toStack = false) {
+        if (stack.busy()) { StackController::osd(QStringLiteral("Stack busy")); return; }
         logLine(QStringLiteral("shortcut-pressed"));
         switch (flow.shortcutPress()) {
         case DaemonLogic::CaptureFlow::Press::Cancel: closeOverlay(); logLine(QStringLiteral("shortcut-cancel")); break;
         case DaemonLogic::CaptureFlow::Press::Busy: logLine(QStringLiteral("capture-busy")); break;
-        case DaemonLogic::CaptureFlow::Press::Capture: startCapture(false); break;
+        case DaemonLogic::CaptureFlow::Press::Capture:
+            if (toStack && !stack.canAdd()) return;
+            appendSelection = toStack; startCapture(false); break;
         }
     }
     // retry marks the capture a press gets after a rebuild (CaptureFlow).
@@ -269,6 +309,9 @@ private:
     QVector<qint64> frameIntervals;
     QAction *action = nullptr;
     bool registered = false;
+    QList<QAction *> stackActions;
+    StackController stack{this};
+    bool appendSelection = false;
 
     static QVector<ScreenState> currentLayout() {
         QVector<ScreenState> result;
@@ -333,6 +376,8 @@ private:
         if (fcntl(fd, F_ADD_SEALS, F_SEAL_SHRINK | F_SEAL_SEAL) < 0) { const int error = errno; ::close(fd); captureFailed(QStringLiteral("memfd-seal %1").arg(strerror(error))); return; }
         QVariantMap options;
         options.insert(QStringLiteral("include-cursor"), false);
+        // Also exclude any just-unmapped busy surface still awaiting a compositor frame.
+        options.insert(QStringLiteral("hide-caller-windows"), true);
         options.insert(QStringLiteral("native-resolution"), true);
         auto message = QDBusMessage::createMethodCall(QStringLiteral("org.kde.KWin"), QStringLiteral("/org/kde/KWin/ScreenShot2"), QStringLiteral("org.kde.KWin.ScreenShot2"), QStringLiteral("CaptureWorkspace"));
         message << options << QVariant::fromValue(QDBusUnixFileDescriptor(fd));
@@ -440,11 +485,15 @@ private:
         if (imageRect.isEmpty()) { logLine(QStringLiteral("selection-empty")); closeOverlay(); return; }
         const qint64 releaseMs = timer.elapsed();
         const QImage selected = desktop.copy(imageRect);
+        const bool toStack = appendSelection;
         closeOverlay();
-        offerImage(selected);
-        logLine(QStringLiteral("clipboard-offer-direct rect=%1,%2 %3x%4 native=%5x%6 release_ms=%7 copy_and_offer_ms=%8").arg(clipped.x()).arg(clipped.y()).arg(clipped.width()).arg(clipped.height()).arg(selected.width()).arg(selected.height()).arg(releaseMs).arg(timer.elapsed() - releaseMs));
+        if (toStack) stack.appendImage(selected);
+        else offerImage(selected);
+        const QString event = toStack ? QStringLiteral("stack-capture-queued") : QStringLiteral("clipboard-offer-direct");
+        logLine(event + QStringLiteral(" rect=%1,%2 %3x%4 native=%5x%6 release_ms=%7 copy_and_queue_or_offer_ms=%8").arg(clipped.x()).arg(clipped.y()).arg(clipped.width()).arg(clipped.height()).arg(selected.width()).arg(selected.height()).arg(releaseMs).arg(timer.elapsed() - releaseMs));
     }
     void closeOverlay() {
+        appendSelection = false;
         flow.closed(); mouseDown = false; dragging = false; shiftHeld = false; pointerKnown = false;
         for (auto *window : windows) window->closeFrozen();
         desktop = QImage();
@@ -614,9 +663,11 @@ int main(int argc, char **argv) {
     const QStringList args = [&] { QStringList list; for (int i = 1; i < argc; ++i) list << QString::fromLocal8Bit(argv[i]); return list; }();
     switch (DaemonLogic::parseCommand(args)) {
     case DaemonLogic::Command::Capture: return requestCapture(argc, argv);
+    case DaemonLogic::Command::HoldClipboard: return holdClipboard(argc, argv, args[1]);
     case DaemonLogic::Command::Usage:
         fprintf(stderr, "usage: %s --capture   capture a region (starts quick-region-overlay.service if needed)\n"
-                        "       %s --daemon    run the daemon; only quick-region-overlay.service does this\n", argv[0], argv[0]);
+                        "       %s --daemon    run the daemon; only quick-region-overlay.service does this\n"
+                        "       %s --hold-clipboard <file>    serve a shutdown clipboard snapshot\n", argv[0], argv[0], argv[0]);
         return DaemonLogic::usageStatus;
     case DaemonLogic::Command::Daemon: break;
     }
@@ -653,8 +704,10 @@ int main(int argc, char **argv) {
     // callers' messages wait for app.exec(), after the registration.
     if (const auto status = DaemonLogic::alreadyRunning(!bus.registerService(QString::fromLatin1(serviceName)))) { qCritical() << "service already running"; return *status; }
     controller.registerShortcut();
+    QObject::connect(&app, &QCoreApplication::aboutToQuit, &controller, [&controller] { controller.shutdown(); });
     logLine(QStringLiteral("service-ready pid=%1 screens=%2").arg(QCoreApplication::applicationPid()).arg(QGuiApplication::screens().size()));
     const int status = app.exec();
+    controller.shutdown(); // Also covers an event-loop exit that didn't emit aboutToQuit.
     controller.deactivateShortcut();
     return status;
 }

@@ -4,6 +4,8 @@
 shopt -s inherit_errexit
 meta_shift_s_code=301989971 # Meta+Shift+S
 print_code=16777225 # Print (Qt::Key_Print)
+stack_actions=(stack-copy stack-capture stack-paste stack-clear)
+stack_codes=(201326659 201326675 201326678 201326680) # Ctrl+Alt+C/S/V/X
 launcher_entry="$HOME/.local/share/applications/quick-region-screenshot-v3.desktop"
 launcher_relative=.local/share/applications/quick-region-screenshot-v3.desktop
 launcher_owner=quick-region-screenshot-v3.desktop/_launch
@@ -23,6 +25,77 @@ fail_point() {
 }
 fail() { echo "$*" >&2; exit 1; }
 need_tools() { local tool; for tool; do command -v "$tool" >/dev/null || fail "Missing tool: $tool"; done; }
+
+# Keep an atomic per-install record, including absent keys. The active flag prevents a rerun (or interrupted
+# install) from backing up our own settings. A completed rollback permits a new install to record current values.
+validate_klipper_record() {
+    local record="${state_dir:?}/klipper-settings.json"
+    [[ -e $record || -L $record ]] || return 0
+    if [[ ! -f $record || -L $record ]]; then fail "Invalid Klipper settings record: $record. Nothing was changed."; fi
+    jq -e '
+        type == "object" and (.active | type == "boolean") and
+        (.values | type == "object" and keys == ["IgnoreImages", "MaxClipItems"] and
+         all(.[]; . == null or type == "string"))
+    ' "$record" >/dev/null || fail "Invalid Klipper settings record: $record. Nothing was changed."
+}
+klipper_value_json() {
+    local key=$1 value alternate file="${XDG_CONFIG_HOME:-$HOME/.config}/klipperrc"
+    # An absolute filename reads only the user's file, so an inherited system value remains an absent user key.
+    value=$(kreadconfig6 --file "$file" --group General --key "$key" --default __qro_absent_1__) || return 1
+    if [[ $value == __qro_absent_1__ ]]; then
+        alternate=$(kreadconfig6 --file "$file" --group General --key "$key" --default __qro_absent_2__) || return 1
+        if [[ $alternate == __qro_absent_2__ ]]; then printf 'null\n'; return 0; fi
+    fi
+    jq -cn --arg value "$value" '$value'
+}
+reload_klipper_settings() {
+    local owner
+    owner=$(busctl --user --timeout=3 call org.freedesktop.DBus /org/freedesktop/DBus \
+        org.freedesktop.DBus NameHasOwner s org.kde.klipper) || fail 'Could not check whether Klipper is running.'
+    case $owner in
+        'b true')
+            busctl --user --timeout=3 --auto-start=no call org.kde.klipper /klipper org.kde.klipper.klipper reloadConfig ||
+                fail 'Could not reload Klipper settings; no desktop processes were restarted.' ;;
+        'b false') echo 'Klipper is not running; clipboard history settings apply when it starts.' ;;
+        *) fail "Unexpected Klipper owner reply: $owner" ;;
+    esac
+}
+install_klipper_settings() {
+    local record="${state_dir:?}/klipper-settings.json" count images current
+    validate_klipper_record
+    if [[ ! -f $record ]] || [[ $(jq -r '.active' "$record") == false ]]; then
+        count=$(klipper_value_json MaxClipItems) || fail 'Could not read Klipper history length.'
+        images=$(klipper_value_json IgnoreImages) || fail 'Could not read Klipper image setting.'
+        (umask 077; jq -cn --argjson count "$count" --argjson images "$images" \
+            '{active: true, values: {MaxClipItems: $count, IgnoreImages: $images}}' >"$record.tmp" &&
+            mv -- "$record.tmp" "$record") || fail 'Could not record previous Klipper settings.'
+    fi
+    # Raise the effective history length to at least 100, never lower it: shrinking discards older entries.
+    current=$(kreadconfig6 --file klipperrc --group General --key MaxClipItems --default 0) ||
+        fail 'Could not read Klipper history length.'
+    if [[ ! $current =~ ^[0-9]{1,9}$ ]] || ((10#$current < 100)); then
+        kwriteconfig6 --file klipperrc --group General --key MaxClipItems 100
+    fi
+    kwriteconfig6 --file klipperrc --group General --key IgnoreImages --type bool false
+    reload_klipper_settings
+}
+restore_klipper_settings() {
+    local record="${state_dir:?}/klipper-settings.json" key value
+    validate_klipper_record
+    [[ -f $record ]] || return 0 # Installs predating the clipboard-history configuration have no record.
+    [[ $(jq -r '.active' "$record") == true ]] || return 0 # Already restored; later user changes stay.
+    for key in MaxClipItems IgnoreImages; do
+        if [[ $(jq -r --arg key "$key" '.values[$key] == null' "$record") == true ]]; then
+            kwriteconfig6 --file klipperrc --group General --key "$key" --delete
+        else
+            value=$(jq -r --arg key "$key" '.values[$key]' "$record")
+            kwriteconfig6 --file klipperrc --group General --key "$key" "$value"
+        fi
+    done
+    reload_klipper_settings
+    (umask 077; jq '.active = false' "$record" >"$record.tmp" && mv -- "$record.tmp" "$record") ||
+        fail 'Could not finish restoring Klipper settings.'
+}
 
 # Holds $state_dir/lock until the script exits, so install.sh and rollback.sh never run at the same time.
 take_lock() {
@@ -386,6 +459,13 @@ state_running() { [[ $1 == active ]]; }
 state_needs_stop() { [[ $1 != inactive && $1 != failed ]]; }
 daemon_running() { state_running "$(unit_state quick-region-overlay.service)"; }
 daemon_needs_stop() { state_needs_stop "$(unit_state quick-region-overlay.service)"; }
+# A retry after replacing the binary must restart an old process, even when the installed bytes already match.
+# Bash -ef follows /proc/<pid>/exe and compares inodes, including when the running executable has been deleted.
+daemon_executable_current() {
+    local pid
+    pid=$(systemctl --user show -P MainPID quick-region-overlay.service) || return 1
+    [[ $pid =~ ^[0-9]+$ && $pid != 0 && /proc/$pid/exe -ef $HOME/.local/libexec/quick-region-overlay ]]
+}
 # Restarts the daemon from any state. reset-failed clears a failed state and its start limit, so a unit that failed
 # repeatedly starts again instead of being refused.
 restart_daemon() {

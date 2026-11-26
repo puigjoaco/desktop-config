@@ -19,8 +19,9 @@ recover=
 trap on_exit EXIT
 
 # 1. Prechecks. Restores and removals are allowed only for files matching an immutable backup.
-need_tools qdbus6 busctl jq kbuildsycoca6 spectacle systemctl systemd-run cmp perl flock sha256sum awk sed install stat paste date cat mkdir cp mv rm dirname sleep grep
+need_tools qdbus6 busctl jq kreadconfig6 kwriteconfig6 kbuildsycoca6 spectacle systemctl systemd-run cmp perl flock sha256sum awk sed install stat paste date cat mkdir cp mv rm dirname sleep grep
 take_lock
+validate_klipper_record
 fresh=0
 if [[ -e $fresh_file || -L $fresh_file ]]; then
     [[ $# == 0 ]] || fail 'A fresh install rolls back to stock Spectacle; use ./rollback.sh without --originals.'
@@ -81,12 +82,14 @@ rm -f -- "$HOME/.config/systemd/user/quick-region-overlay.service" \
     "$HOME/.local/share/applications/quick-region-overlay.desktop" "$HOME/.local/libexec/quick-region-overlay"
 systemctl --user daemon-reload
 unregister_shortcut quick-region-overlay capture-region
+for stack_action in "${stack_actions[@]}"; do unregister_shortcut quick-region-overlay "$stack_action"; done
 fail_point after-daemon-removed
 
 if [[ $fresh == 1 ]]; then
     restore_fresh_keys
     rebuild_cache
     wait_for 30 fresh_keys_restored || fail "Spectacle's original keys changed after rebuilding the cache."
+    restore_klipper_settings
     rm -f -- "$state_file" "$mode_file" "$manifest_file"
     recover=
     echo "Removed Quick Region Overlay; restored Spectacle's original shortcuts."
@@ -134,6 +137,7 @@ if [[ $(systemctl --user show -P Type quick-region-clipboard.service) == simple 
         fail 'quick-region-clipboard.service did not stay up; see journalctl --user -u quick-region-clipboard.service'
 fi
 fail_point after-clipboard-service
+restore_klipper_settings
 rm -f -- "$state_file" "$mode_file" "$manifest_file"
 recover=
 echo "Restored the $mode screenshot pipeline; Meta+Shift+S is on the launcher and Print is on Spectacle."

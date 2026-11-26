@@ -9,9 +9,48 @@ using Flow = CaptureFlow;
 class DaemonLogicTest final : public QObject {
     Q_OBJECT
 private slots:
+    void shortcutKeysReleaseHeldKeysFirst() {
+        const auto events = DaemonLogic::shortcutKeyEvents(false, false);
+        const auto at = [&events](quint16 type, quint16 code, qint32 value) {
+            for (qsizetype i = 0; i < events.size(); ++i)
+                if (events[i].type == type && events[i].code == code && events[i].value == value) return i;
+            return qsizetype(-1);
+        };
+        QVERIFY(at(EV_KEY, KEY_LEFTALT, 0) >= 0 && at(EV_KEY, KEY_LEFTALT, 0) < at(EV_KEY, KEY_V, 1));
+        QVERIFY(at(EV_KEY, KEY_V, 0) < at(EV_KEY, KEY_LEFTCTRL, 1)); // a still-held V is released before the new press
+        QVERIFY(at(EV_KEY, KEY_LEFTCTRL, 1) < at(EV_KEY, KEY_V, 1));
+        QVERIFY(at(EV_KEY, KEY_V, 1) < at(EV_KEY, KEY_LEFTCTRL, 0));
+        QCOMPARE(events.last().type, quint16(EV_SYN));
+        QCOMPARE(at(EV_KEY, KEY_LEFTSHIFT, 1), qsizetype(-1));
+        const auto terminal = DaemonLogic::shortcutKeyEvents(true, true);
+        QVERIFY(std::any_of(terminal.begin(), terminal.end(), [](const auto &e) { return e.code == KEY_C && e.value == 1; }));
+        QVERIFY(std::any_of(terminal.begin(), terminal.end(), [](const auto &e) { return e.code == KEY_LEFTSHIFT && e.value == 1; }));
+        // With left Ctrl physically held, the batch uses right Ctrl, which a physical left-Ctrl release cannot clear.
+        QCOMPARE(DaemonLogic::freeModifierKey(true, KEY_LEFTCTRL, KEY_RIGHTCTRL), quint16(KEY_RIGHTCTRL));
+        QCOMPARE(DaemonLogic::freeModifierKey(false, KEY_LEFTCTRL, KEY_RIGHTCTRL), quint16(KEY_LEFTCTRL));
+        const auto right = DaemonLogic::shortcutKeyEvents(false, false, KEY_RIGHTCTRL);
+        QVERIFY(std::none_of(right.begin(), right.end(), [](const auto &e) { return e.code == KEY_LEFTCTRL; }));
+        QVERIFY(std::any_of(right.begin(), right.end(), [](const auto &e) { return e.code == KEY_RIGHTCTRL && e.value == 1; }));
+        // Still-held Alt is pressed again after Ctrl+V, so holding Ctrl+Alt keeps the next shortcut working.
+        const auto held = DaemonLogic::restoredModifiers([](int key) { return key == KEY_LEFTALT || key == KEY_LEFTMETA; });
+        QCOMPARE(held, QList<quint16>({KEY_LEFTALT}));
+        const auto again = DaemonLogic::shortcutKeyEvents(false, false, KEY_LEFTCTRL, KEY_LEFTSHIFT, held);
+        qsizetype ctrlUp = -1, altDown = -1, altUp = -1;
+        for (qsizetype i = 0; i < again.size(); ++i) {
+            if (again[i].code == KEY_LEFTCTRL && again[i].value == 0) ctrlUp = i;
+            if (again[i].code == KEY_LEFTALT && again[i].value == 1) altDown = i;
+            if (again[i].code == KEY_LEFTALT && again[i].value == 0 && altUp < 0) altUp = i;
+        }
+        QVERIFY(altUp >= 0 && altUp < ctrlUp && ctrlUp < altDown);
+        QCOMPARE(again.last().type, quint16(EV_SYN));
+    }
     void commands() {
         QCOMPARE(parseCommand({QStringLiteral("--capture")}), Command::Capture);
         QCOMPARE(parseCommand({QStringLiteral("--daemon")}), Command::Daemon);
+        QCOMPARE(parseCommand({QStringLiteral("--hold-clipboard"), QStringLiteral("/tmp/snapshot.qrs")}), Command::HoldClipboard);
+        QCOMPARE(parseCommand({QStringLiteral("--hold-clipboard")}), Command::Usage);
+        QCOMPARE(parseCommand({QStringLiteral("--hold-clipboard"), QString()}), Command::Usage);
+        QCOMPARE(parseCommand({QStringLiteral("--hold-clipboard"), QStringLiteral("file"), QStringLiteral("extra")}), Command::Usage);
         QCOMPARE(parseCommand({}), Command::Usage);
         QCOMPARE(parseCommand({QStringLiteral("--daemon"), QStringLiteral("--capture")}), Command::Usage);
         QCOMPARE(parseCommand({QStringLiteral("--capture"), QStringLiteral("extra")}), Command::Usage);

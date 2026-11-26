@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Mattux
+Exec=@HOME@/.local/libexec/mattux
+Icon=mattux
+Terminal=false
+Categories=Utility;Settings;
+X-KDE-autostart-phase=2

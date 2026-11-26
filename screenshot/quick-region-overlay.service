@@ -1,6 +1,8 @@
 [Unit]
 Description=Quick region frozen overlay and native Wayland clipboard
 After=graphical-session.target
+After=ydotool.service
+Wants=ydotool.service
 PartOf=graphical-session.target
 # D-Bus activation outside a graphical session fails here instead of starting a daemon that can't reach a compositor.
 # Starting with the session is unaffected: graphical-session.target pulls this unit into its own start transaction.
