@@ -70,6 +70,28 @@ private slots:
         {auto db=QSqlDatabase::addDatabase("QSQLITE",connection);db.setDatabaseName(dir.filePath("history.sqlite"));QVERIFY(db.open());QSqlQuery q(db);QVERIFY(q.exec("UPDATE settings SET value='71' WHERE key='maxUnpinned'"));}
         QSqlDatabase::removeDatabase(connection);QCOMPARE(h.maxUnpinned(),100);
     }
+    void invalidStoredLimitSkipsAutomaticRetention_data() {
+        QTest::addColumn<QString>("sql");QTest::addColumn<bool>("pinning");
+        const QStringList values{"'1000'","'71'","'unreadable'","NULL","'50garbage'"};
+        for(bool pinning:{false,true}) {
+            for(const auto &value:values)QTest::newRow(qPrintable(value+(pinning?"-pin":"-merge")))<<QString("UPDATE settings SET value=%1 WHERE key='maxUnpinned'").arg(value)<<pinning;
+            QTest::newRow(pinning?"query-error-pin":"query-error-merge")<<QString("DROP TABLE settings")<<pinning;
+        }
+    }
+    void invalidStoredLimitSkipsAutomaticRetention() {
+        QFETCH(QString,sql);QFETCH(bool,pinning);QTemporaryDir dir;History h(dir.path());QCOMPARE(h.setMaxUnpinned(200),0);
+        QVector<Item> entries;for(int i=0;i<150;++i)entries<<textItem(QString::number(i),i+1);
+        auto pinned=textItem("pinned",0);pinned.pinned=true;entries<<pinned;QVERIFY(h.merge(entries));
+        const QString connection="invalid-retention";
+        {auto db=QSqlDatabase::addDatabase("QSQLITE",connection);db.setDatabaseName(dir.filePath("history.sqlite"));QVERIFY(db.open());QSqlQuery q(db);QVERIFY(q.exec(sql));}
+        QSqlDatabase::removeDatabase(connection);QCOMPARE(h.maxUnpinned(),100);
+        if(pinning)QVERIFY(h.pin("pinned"));else QVERIFY(h.merge({textItem("new",200)}));
+        QCOMPARE(h.usage().unpinned,151);QCOMPARE(h.items().size(),pinning?151:152);
+        // Inspect payloads directly: choose() needs the intentionally unreadable settings table.
+        {auto db=QSqlDatabase::addDatabase("QSQLITE",connection);db.setDatabaseName(dir.filePath("history.sqlite"));QVERIFY(db.open());QSqlQuery q(db);QVERIFY(q.exec("SELECT COUNT(*) FROM payloads"));QVERIFY(q.next());QCOMPARE(q.value(0).toInt(),pinning?151:152);}
+        QSqlDatabase::removeDatabase(connection);
+        if(!sql.startsWith("DROP")){QCOMPARE(h.setMaxUnpinned(100),51);QCOMPARE(h.usage().unpinned,100);QCOMPARE(h.usage().pinned,pinning?0:1);}
+    }
     void listingUsesMetadataAndBoundedPreviews() {
         QTemporaryDir dir;History h(dir.path());
         auto text=textItem("text",2,"Needle");

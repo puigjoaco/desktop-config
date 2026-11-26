@@ -233,6 +233,38 @@ class InstallerTest(unittest.TestCase):
                     self.assertEqual(installer.policy.read_bytes(), old_clear)
                     self.assertEqual(installer.limit_policy.read_bytes(), (SOURCE / m.LIMIT_POLICY).read_bytes())
 
+    def test_upgrade_policy_sudo_failure_preserves_complete_installation(self):
+        for owned in (False, True):
+            with self.subTest(owned=owned), tempfile.TemporaryDirectory() as home:
+                installer, binary, bus, services, calls = self.setup_install(home)
+                if not owned:
+                    installer.policy.parent.mkdir()
+                    shutil.copyfile(SOURCE / m.POLICY, installer.policy)
+                installer.install(binary)
+                saved = installer.load();saved.pop("limit_policy");installer.limit_policy.unlink()
+                m.atomic_json(installer.manifest, saved)
+                files = {rel: (Path(home) / rel).read_bytes() for rel in m.FILES}
+                bindings, service_state = copy.deepcopy(bus.keys), services.copy()
+                config, clear_policy = installer.klipper.path.read_bytes(), installer.policy.read_bytes()
+                previous = installer.runner
+                def refused(args, check=True):
+                    if args[0] == "sudo":
+                        raise subprocess.CalledProcessError(1, args)
+                    return previous(args, check)
+                installer.runner = refused
+                with self.assertRaisesRegex(RuntimeError, "passwordless sudo"):
+                    installer.install(binary)
+                self.assertEqual({rel: (Path(home) / rel).read_bytes() for rel in m.FILES}, files)
+                self.assertEqual(bus.keys, bindings);self.assertEqual(services, service_state)
+                self.assertEqual(installer.klipper.path.read_bytes(), config)
+                self.assertEqual(installer.policy.read_bytes(), clear_policy)
+                current = installer.load();self.assertTrue(current["complete"])
+                for key in ("managed", "files", "shortcuts", "service", "policy", "klipper"):
+                    self.assertEqual(current[key], saved[key])
+                self.assertFalse(installer.limit_policy.exists())
+                installer.runner = previous;installer.install(binary)
+                self.assertTrue(installer.limit_policy.exists());self.assertTrue(installer.load()["complete"])
+
     def test_upgrade_failure_removes_only_new_policy_and_retains_original_snapshots(self):
         with tempfile.TemporaryDirectory() as home:
             installer, binary, *_ = self.setup_install(home)
@@ -366,6 +398,7 @@ class InstallerTest(unittest.TestCase):
             self.assertIn("MaxClipItems=100", result.stdout)
             self.assertIn("sudo -n install", result.stdout)
             self.assertIn("auth_self", result.stdout)
+            self.assertIn("remove only the policies installed by this installer", result.stdout)
             self.assertEqual(list(Path(home).iterdir()), [])
 
 

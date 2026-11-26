@@ -53,6 +53,7 @@ private:
     QString connection;
     mutable QString lastError;
     bool enforceRetention(int limit);
+    int storedMaxUnpinned() const; // Zero means invalid/unreadable: do not trim automatically.
     bool execute(const QString &sql, const QVariantList &args = {});
     bool finishTransaction(bool ok);
 };

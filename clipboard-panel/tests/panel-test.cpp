@@ -3,6 +3,7 @@
 #include <QDir>
 #include <QFile>
 #include <QScrollBar>
+#include <QScrollArea>
 #include <QScopeGuard>
 #include <QLineEdit>
 #include <QListWidget>
@@ -114,7 +115,7 @@ private slots:
         Panel restored(&history,config);restored.prepareOpen(QRect(1600,0,500,400));restored.show();QApplication::processEvents();QCOMPARE(restored.size(),QSize(500,400));
         QCOMPARE(QSettings(config,QSettings::IniFormat).value("Window/size").toSize(),QSize(800,700));
         restored.hide();restored.prepareOpen(QRect(0,0,1600,1000));restored.show();QApplication::processEvents();QCOMPARE(restored.size(),QSize(800,700));
-        restored.resize(100,100);QApplication::processEvents();QCOMPARE(restored.size(),QSize(360,240));
+        restored.resize(100,100);QApplication::processEvents();QCOMPARE(restored.size(),restored.minimumSize());
         restored.hide();restored.prepareOpen(QRect(0,0,320,200));restored.show();QApplication::processEvents();QCOMPARE(restored.size(),QSize(320,200));
     }
     void responsiveCardHeightsAndResizeCursors() {
@@ -175,16 +176,75 @@ private slots:
         QTRY_VERIFY(qApp->findChildren<QProcess*>().isEmpty());
     }
     void settingsNavigationAndLiveCounts() {
-        QTemporaryDir dir;History h(dir.path());QVERIFY(h.merge(examples()));Panel panel(&h,dir.filePath("panelrc"));panel.prepareOpen();panel.show();QApplication::processEvents();panel.resize(360,240);QApplication::processEvents();
+        QTemporaryDir dir;History h(dir.path());QVERIFY(h.merge(examples()));Panel panel(&h,dir.filePath("panelrc"));panel.prepareOpen();panel.show();QApplication::processEvents();panel.resize(360,240);QApplication::processEvents();const QSize opening=panel.size();
         auto *search=panel.findChild<QLineEdit*>("filter");auto *back=panel.findChild<QToolButton*>("back");auto *save=panel.findChild<QPushButton*>("saveLimit");auto *clear=panel.findChild<QPushButton*>("clearAll");
         QTest::keyClick(search,Qt::Key_Comma,Qt::ControlModifier);QVERIFY(panel.findChild<QWidget*>("settingsPage")->isVisible());QVERIFY(search->isHidden());QVERIFY(panel.findChild<QPushButton*>("limit100")->hasFocus());QVERIFY(!save->isEnabled());QVERIFY(panel.height()>240);
-        QCOMPARE(QSettings(dir.filePath("panelrc"),QSettings::IniFormat).value("Window/size").toSize(),QSize(360,240));
+        QCOMPARE(QSettings(dir.filePath("panelrc"),QSettings::IniFormat).value("Window/size").toSize(),opening);
         auto *limit=panel.findChild<QPushButton*>("limit100");QTest::keyClick(limit,Qt::Key_Right);QVERIFY(panel.findChild<QPushButton*>("limit200")->isChecked());QVERIFY(save->isEnabled());
         QTest::keyClick(panel.focusWidget(),Qt::Key_Tab);QVERIFY(save->hasFocus());QTest::keyClick(save,Qt::Key_Tab);QVERIFY(clear->hasFocus());QTest::keyClick(clear,Qt::Key_Tab);QVERIFY(back->hasFocus());QTest::keyClick(back,Qt::Key_Tab);QVERIFY(panel.findChild<QPushButton*>("limit200")->hasFocus());
         QTest::keyClick(&panel,Qt::Key_Delete);QTest::keyClick(&panel,Qt::Key_P,Qt::ControlModifier);QCOMPARE(h.items().size(),7);
         Item item;item.id="extra";item.added=20;item.text="extra";item.payloads["text/plain"]="extra";QVERIFY(h.merge({item}));panel.refresh();QVERIFY(panel.findChild<QLabel*>("historyUsage")->text().startsWith("Ahora: 7 tarjetas y 1 fijada · "));
-        QTest::keyClick(&panel,Qt::Key_Escape);QCOMPARE(panel.size(),QSize(360,240));QVERIFY(search->hasFocus());QCOMPARE(h.maxUnpinned(),100);
+        QTest::keyClick(&panel,Qt::Key_Escape);QCOMPARE(panel.size(),opening);QVERIFY(search->hasFocus());QCOMPARE(h.maxUnpinned(),100);
         QTest::mouseClick(panel.findChild<QToolButton*>("settings"),Qt::LeftButton);QVERIFY(panel.findChild<QPushButton*>("limit100")->isChecked());QTest::mouseClick(panel.findChild<QPushButton*>("limit50"),Qt::LeftButton);panel.prepareOpen();QVERIFY(search->isVisible());QVERIFY(search->hasFocus());
+    }
+    void settingsSwitchKeepsPlacedWindowInsideWorkArea() {
+        QTemporaryDir dir;History h(dir.path());Panel panel(&h,dir.filePath("panelrc"));
+        const QRect area(0,0,800,600);panel.prepareOpen(area);panel.show();QApplication::processEvents();
+        const QSize opening=panel.size();QVERIFY(opening.height()>=300);
+        panel.move(100,area.bottom()-opening.height()+1);const QRect placed=panel.geometry();
+        QTest::mouseClick(panel.findChild<QToolButton*>("settings"),Qt::LeftButton);QApplication::processEvents();
+        QCOMPARE(panel.geometry(),placed);QVERIFY(area.contains(panel.geometry()));
+        QVERIFY(h.merge(examples()));panel.refresh();QApplication::processEvents();QCOMPARE(panel.geometry(),placed);
+        QTest::keyClick(&panel,Qt::Key_Escape);QApplication::processEvents();QCOMPARE(panel.geometry(),placed);
+        QVERIFY(!QSettings(dir.filePath("panelrc"),QSettings::IniFormat).contains("Window/size"));
+    }
+    void settingsResizePersistsOnlyUserSize() {
+        QTemporaryDir dir;History h(dir.path());const auto config=dir.filePath("panelrc");QSize chosen;
+        {
+            Panel panel(&h,config);panel.prepareOpen(QRect(0,0,1600,1000));panel.show();QApplication::processEvents();
+            QTest::mouseClick(panel.findChild<QToolButton*>("settings"),Qt::LeftButton);
+            panel.resize(360,240);QApplication::processEvents();chosen=panel.size();
+            QCOMPARE(QSettings(config,QSettings::IniFormat).value("Window/size").toSize(),chosen);
+            QTest::keyClick(&panel,Qt::Key_Escape);QApplication::processEvents();QCOMPARE(panel.size(),chosen);
+        }
+        Panel restored(&h,config);restored.prepareOpen(QRect(0,0,1600,1000));restored.show();QApplication::processEvents();QCOMPARE(restored.size(),chosen);
+    }
+    void shortWorkAreaScrollsSettingsWithoutCompressingLabels() {
+        QTemporaryDir dir;History h(dir.path());QVector<Item> entries=examples();
+        for(int i=0;i<80;++i){Item item;item.id=QString::number(i);item.added=i+20;item.payloads["text/plain"]="x";entries<<item;}QVERIFY(h.merge(entries));
+        Panel panel(&h,dir.filePath("panelrc"));panel.prepareOpen(QRect(0,0,360,240));panel.show();QApplication::processEvents();
+        QTest::mouseClick(panel.findChild<QToolButton*>("settings"),Qt::LeftButton);QTest::mouseClick(panel.findChild<QPushButton*>("limit50"),Qt::LeftButton);QApplication::processEvents();
+        QCOMPARE(panel.size(),QSize(360,240));auto *scroll=panel.findChild<QScrollArea*>();QVERIFY(scroll);QVERIFY(scroll->verticalScrollBar()->maximum()>0);
+        QCOMPARE(scroll->frameShape(),QFrame::NoFrame);QCOMPARE(scroll->horizontalScrollBarPolicy(),Qt::ScrollBarAlwaysOff);
+        for(const auto name:{"historyUsage","retentionWarning","saveStatus","clearStatus"}) {
+            auto *label=panel.findChild<QLabel*>(name);QVERIFY(label->isVisible());QVERIFY(label->height()>=label->heightForWidth(label->width()));
+        }
+        auto *clear=panel.findChild<QPushButton*>("clearAll");scroll->ensureWidgetVisible(clear);QApplication::processEvents();
+        QVERIFY(scroll->verticalScrollBar()->value()>0);QVERIFY(scroll->viewport()->rect().contains(QRect(clear->mapTo(scroll->viewport(),QPoint()),clear->size())));
+        auto *bar=scroll->verticalScrollBar();bar->setValue(0);QStyleOptionSlider option;option.initFrom(bar);option.orientation=Qt::Vertical;option.minimum=0;option.maximum=bar->maximum();option.pageStep=bar->pageStep();option.sliderPosition=0;option.sliderValue=0;
+        const auto handle=bar->style()->subControlRect(QStyle::CC_ScrollBar,&option,QStyle::SC_ScrollBarSlider,bar);
+        const QPoint press(bar->width()-1,handle.center().y());QTest::mousePress(bar,Qt::LeftButton,Qt::NoModifier,press);QVERIFY(bar->isSliderDown());QTest::mouseRelease(bar,Qt::LeftButton,Qt::NoModifier,press);QVERIFY(!bar->isSliderDown());
+        QTest::keyClick(&panel,Qt::Key_Escape);QApplication::processEvents();QCOMPARE(panel.size(),QSize(360,240));
+    }
+    void settingsEnterAutoRepeatDoesNotAuthorize_data() {
+        QTest::addColumn<int>("key");QTest::addColumn<bool>("saving");
+        for(int key:{Qt::Key_Return,Qt::Key_Enter})for(bool saving:{false,true})QTest::newRow(qPrintable(QString::number(key)+(saving?"-save":"-clear")))<<key<<saving;
+    }
+    void settingsEnterAutoRepeatDoesNotAuthorize() {
+        QFETCH(int,key);QFETCH(bool,saving);QTemporaryDir dir;History h(dir.path());QVERIFY(h.merge(examples()));
+        const auto program=dir.filePath("pkcheck-fake"),calls=dir.filePath("calls");QFile script(program);QVERIFY(script.open(QIODevice::WriteOnly));
+        script.write("#!/bin/sh\necho called >> '"+calls.toUtf8()+"'\nexit 1\n");script.close();QVERIFY(script.setPermissions(QFile::ReadOwner|QFile::WriteOwner|QFile::ExeOwner));
+        Panel panel(&h,dir.filePath("panelrc"),program);panel.prepareOpen();panel.show();QApplication::processEvents();QTest::mouseClick(panel.findChild<QToolButton*>("settings"),Qt::LeftButton);
+        auto *target=panel.findChild<QPushButton*>(saving?"limit200":"clearAll");if(saving)target->click();target->setFocus();QTest::keyClick(target,Qt::Key(key));
+        QTRY_VERIFY(panel.findChild<QToolButton*>("back")->isEnabled());
+        // A failed save resets the preset; selecting it again makes a repeated Enter actionable.
+        if(saving)target->click();target->setFocus();
+        for(int i=0;i<3;++i) {
+            QKeyEvent repeat(QEvent::KeyPress,key,Qt::NoModifier,QString(),true,1);QApplication::sendEvent(target,&repeat);
+            QTRY_VERIFY(panel.findChild<QToolButton*>("back")->isEnabled());
+            if(saving)target->click();target->setFocus();
+        }
+        QFile log(calls);QVERIFY(log.open(QIODevice::ReadOnly));QCOMPARE(log.readAll(),QByteArray("called\n"));QCOMPARE(h.items().size(),7);
     }
     void saveAuthorization_data() {clearAuthorization_data();}
     void saveAuthorization() {
@@ -295,7 +355,10 @@ private slots:
             Panel settingsPanel(&settingsHistory,fixture.filePath("panelrc"),program);settingsPanel.prepareOpen(QRect(0,0,1600,1000));settingsPanel.show();QApplication::processEvents();settingsPanel.resize(560,360);
             auto settingsRender=[&](const QString &name){QApplication::processEvents();QImage image(settingsPanel.size()*2,QImage::Format_ARGB32_Premultiplied);image.setDevicePixelRatio(2);image.fill(Qt::transparent);settingsPanel.render(&image);QVERIFY(image.save(QDir(output).filePath((dark?"dark-":"light-")+name+".png")));};
             settingsRender("lista");QTest::mouseClick(settingsPanel.findChild<QToolButton*>("settings"),Qt::LeftButton);settingsRender("ajustes");
-            QTest::mouseClick(settingsPanel.findChild<QPushButton*>("limit50"),Qt::LeftButton);settingsRender("bajar");settingsPanel.resize(360,346);settingsRender("bordes");settingsPanel.resize(560,360);
+            QTest::mouseClick(settingsPanel.findChild<QPushButton*>("limit50"),Qt::LeftButton);settingsRender("bajar");settingsPanel.resize(360,346);settingsRender("bordes");
+            settingsPanel.prepareOpen(QRect(0,0,360,240));QTest::mouseClick(settingsPanel.findChild<QToolButton*>("settings"),Qt::LeftButton);QTest::mouseClick(settingsPanel.findChild<QPushButton*>("limit50"),Qt::LeftButton);settingsRender("ajustes-360x240");
+            auto *scroll=settingsPanel.findChild<QScrollArea*>();scroll->verticalScrollBar()->setValue(scroll->verticalScrollBar()->maximum());settingsRender("ajustes-360x240-scroll");
+            settingsPanel.prepareOpen(QRect(0,0,1600,1000));QTest::mouseClick(settingsPanel.findChild<QToolButton*>("settings"),Qt::LeftButton);QTest::mouseClick(settingsPanel.findChild<QPushButton*>("limit50"),Qt::LeftButton);settingsPanel.resize(560,360);
             QFile result(resultFile);QVERIFY(result.open(QIODevice::WriteOnly));result.write("3");result.close();QTest::mouseClick(settingsPanel.findChild<QPushButton*>("saveLimit"),Qt::LeftButton);settingsRender("esperando");QTRY_VERIFY(settingsPanel.findChild<QToolButton*>("back")->isEnabled());settingsRender("cancelado");
             QVERIFY(result.open(QIODevice::WriteOnly|QIODevice::Truncate));result.write("0");result.close();QTest::mouseClick(settingsPanel.findChild<QPushButton*>("limit50"),Qt::LeftButton);QTest::mouseClick(settingsPanel.findChild<QPushButton*>("saveLimit"),Qt::LeftButton);QTRY_COMPARE(settingsHistory.maxUnpinned(),50);settingsRender("guardado");
             QTest::mouseClick(settingsPanel.findChild<QPushButton*>("clearAll"),Qt::LeftButton);QTRY_COMPARE(settingsHistory.usage().unpinned,0);settingsRender("borrado");

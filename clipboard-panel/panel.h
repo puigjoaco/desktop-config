@@ -10,6 +10,7 @@ class QProcess;
 class QAction;
 class QToolButton;
 class QButtonGroup;
+class QScrollArea;
 namespace Clip {
 class Panel final : public QWidget {
     Q_OBJECT
@@ -41,7 +42,8 @@ private:
     void finishAuthorization(int result);
     void showSettings(bool show);
     void updateSettings();
-    void growSettings();
+    void updateMinimumHeight(int width);
+    void updateSettingsHeight();
     History *history;
     QListWidget *list = nullptr;
     QWidget *header = nullptr;
@@ -53,6 +55,7 @@ private:
     QToolButton *settingsButton = nullptr;
     QToolButton *backButton = nullptr;
     QWidget *settingsPage = nullptr;
+    QScrollArea *settingsScroll = nullptr;
     QWidget *listPage = nullptr;
     QButtonGroup *presets = nullptr;
     QPushButton *saveButton = nullptr;
@@ -62,9 +65,9 @@ private:
     QLabel *clearStatus = nullptr;
     QLabel *divider = nullptr;
     bool settingsVisible = false;
+    bool preserveViewSize = false;
     bool savingLimit = false;
     int selectedLimit = 100;
-    QSize listSize;
     QString settingsFile;
     QString authorizationProgram;
     QProcess *authorization = nullptr;

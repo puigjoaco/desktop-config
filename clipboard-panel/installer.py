@@ -321,8 +321,12 @@ class Installer:
             saved = self.backup()
             # Durable snapshot precedes the first desktop change, including failure recovery.
             atomic_json(self.manifest, saved)
-        try:
+        # A policy upgrade must succeed before rollback can tear down a working install.
+        if saved.get("complete"):
             self.install_policy(saved)
+        try:
+            if not saved.get("complete"):
+                self.install_policy(saved)
             self.klipper.write()
             self.reload_klipper()
             self.stop_if_running()
@@ -391,7 +395,7 @@ def main():
         for policy in (POLICY, LIMIT_POLICY):
             print("Polkit: sudo -n install -m 0644", source / policy, POLICY_DIRECTORY / policy)
         print("Polkit: auth_self for active users on EVERY Guardar and Borrar todo; inactive/other sessions denied. Plasma handles the password.")
-        print("Uninstall/rollback: restore previous MaxClipItems (or remove the added key/file) unless it was changed since, reload Klipper; sudo -n remove only the policy installed by this installer.")
+        print("Uninstall/rollback: restore previous MaxClipItems (or remove the added key/file) unless it was changed since, reload Klipper; sudo -n remove only the policies installed by this installer.")
         print("Private backups + exact four-chord shortcut snapshot:", home / ".local/state/clipboard-panel")
         print("Read Meta+V owners; abort on any owner except plasmashell/show-on-mouse-pos and clipboard-panel/show-history.")
         print("Record both actions' current keys; remove ONLY Meta+V from plasmashell/show-on-mouse-pos.")

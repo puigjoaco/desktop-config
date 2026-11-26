@@ -22,8 +22,8 @@ no terminó de guardarse, se vuelve a intentar sin cambiar la fecha original.
   a la lista y descarta los cambios pendientes. En Ajustes, Tab recorre los controles;
   ← / → elige un preset y Enter sobre los presets o Guardar guarda el cambio.
 - Ajustes ofrece 50 · 100 · 200 · 500 tarjetas no fijadas (100 por defecto), el número de
-  tarjetas y fijados y el tamaño de sus cargas. Si el panel es demasiado bajo, crece
-  temporalmente para mostrar los ajustes y recupera el tamaño anterior al volver.
+  tarjetas y fijados y el tamaño de sus cargas. Cambiar de vista conserva el tamaño;
+  en pantallas muy bajas, los ajustes se desplazan dentro del panel.
 - Arrastrar la fila del título: mover la ventana durante esa apertura. La posición no se guarda;
   cada Meta+V vuelve a abrir junto al puntero.
 - Arrastrar cualquier borde o esquina: cambiar el tamaño; se recuerda al reabrir y reiniciar.
@@ -54,7 +54,9 @@ forense de los bloques de SQLite o del disco.
 
 El aspecto usa los colores de la paleta del sistema. Es una ventana de herramienta
 normal, sin marco y redimensionable. Empieza con 560 px de ancho y se ajusta al
-contenido hasta 760 px de alto (mínimo 360 × 240, salvo pantallas más pequeñas).
+contenido hasta 760 px de alto. El mínimo es 360 px de ancho y la altura necesaria
+para Ajustes a ese ancho (aprox. 320 px a 560 de ancho y 346 px a 360), limitado
+al área disponible del monitor.
 Al redimensionarla, conserva ancho y alto en `~/.config/clipboard-panelrc`
 (o `$XDG_CONFIG_HOME/clipboard-panelrc`); el historial pasa a desplazarse dentro
 de ese tamaño. Al abrir, se limita al área disponible del monitor del puntero.
@@ -176,7 +178,8 @@ verificarse con el usuario presente, después de la revisión del orquestador:
    revierte la selección sin guardar ni borrar. Repetir y autorizar: se guarda el
    límite y desaparecen solo las tarjetas no fijadas más antiguas. Comprobar el
    límite tras reiniciar y que subirlo no restaura lo eliminado. Verificar Esc,
-   Volver, flechas, Tab y Enter, y el crecimiento temporal con una ventana baja.
+   Volver, flechas, Tab y Enter; cambiar de vista debe conservar el tamaño y,
+   en un área de trabajo baja, Ajustes debe desplazarse sin superponer el texto.
    En Ajustes, pulsar Borrar todo, cancelar y luego autorizar: solo permanecen los
    fijados. Cada acción debe pedir contraseña otra vez. Tras cerrar el diálogo,
    verificar que KWin devuelve el foco al panel y que un clic fuera lo cierra.

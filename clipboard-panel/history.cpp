@@ -151,10 +151,11 @@ bool History::merge(QVector<Item> incoming) {
         }
         if (!ok) break;
     }
-    if (ok) ok = enforceRetention(maxUnpinned());
+    if (ok) ok = enforceRetention(storedMaxUnpinned());
     return finishTransaction(ok);
 }
 bool History::enforceRetention(int limit) {
+    if(limit<=0)return true;
     // Pinned items never count toward the limit. Keep tombstones only.
     return execute(QStringLiteral("UPDATE items SET hidden=1 WHERE hidden=0 AND pinned=0 AND id NOT IN (SELECT id FROM items WHERE hidden=0 AND pinned=0 ORDER BY added DESC, id DESC LIMIT ?)"), {limit}) &&
         execute(QStringLiteral("UPDATE items SET text='' WHERE hidden=1")) &&
@@ -162,9 +163,14 @@ bool History::enforceRetention(int limit) {
 }
 
 int History::maxUnpinned() const {
-    QSqlQuery q(db);q.exec(QStringLiteral("SELECT value FROM settings WHERE key='maxUnpinned'"));
-    const int value=q.next()?q.value(0).toInt():100;
-    return QList<int>{50,100,200,500}.contains(value)?value:100;
+    const int value=storedMaxUnpinned();return value?value:100;
+}
+int History::storedMaxUnpinned() const {
+    QSqlQuery q(db);
+    if(!q.exec(QStringLiteral("SELECT value FROM settings WHERE key='maxUnpinned'")))return 0;
+    if(!q.next())return q.lastError().isValid()?0:100;
+    bool ok=false;const int value=q.value(0).toString().toInt(&ok);
+    return ok&&QList<int>{50,100,200,500}.contains(value)?value:0;
 }
 History::Usage History::usage() const {
     Usage result;QSqlQuery q(db);
@@ -231,7 +237,7 @@ std::unique_ptr<QMimeData> History::choose(const QString &id) {
 }
 bool History::pin(const QString &id) {
     if (!db.transaction()) return false;
-    return finishTransaction(execute(QStringLiteral("UPDATE items SET pinned=NOT pinned WHERE id=? AND hidden=0"), {id}) && enforceRetention(maxUnpinned()));
+    return finishTransaction(execute(QStringLiteral("UPDATE items SET pinned=NOT pinned WHERE id=? AND hidden=0"), {id}) && enforceRetention(storedMaxUnpinned()));
 }
 bool History::remove(const QString &id) {
     if (!db.transaction()) return false;

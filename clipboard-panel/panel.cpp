@@ -18,6 +18,7 @@
 #include <QPainterPath>
 #include <QPushButton>
 #include <QScrollBar>
+#include <QScrollArea>
 #include <QStyledItemDelegate>
 #include <QTextLayout>
 #include <QVBoxLayout>
@@ -205,7 +206,8 @@ Panel::Panel(History *history, const QString &settingsFile, const QString &autho
     list=new QListWidget(this);list->setObjectName(QStringLiteral("history"));list->setFrameShape(QFrame::NoFrame);list->setMouseTracking(true);list->setSelectionMode(QAbstractItemView::SingleSelection);list->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);list->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);list->setFocusPolicy(Qt::NoFocus);list->setItemDelegate(new CardDelegate(list));list->viewport()->setAttribute(Qt::WA_Hover);list->viewport()->installEventFilter(this);list->installEventFilter(this);list->setAccessibleName(QStringLiteral("Historial, más reciente primero"));
     body->addWidget(list,1);list->verticalScrollBar()->setFocusPolicy(Qt::NoFocus);
     empty=new EmptyLabel(this);empty->setAlignment(Qt::AlignCenter);empty->setMinimumHeight(152);body->addWidget(empty,1);
-    settingsPage=new QWidget(this);settingsPage->setObjectName(QStringLiteral("settingsPage"));settingsPage->setSizePolicy(QSizePolicy::Preferred,QSizePolicy::Ignored);layout->addWidget(settingsPage,1);settingsPage->hide();
+    settingsScroll=new QScrollArea(this);settingsScroll->setFrameShape(QFrame::NoFrame);settingsScroll->setWidgetResizable(true);settingsScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);settingsScroll->setSizePolicy(QSizePolicy::Preferred,QSizePolicy::Ignored);settingsScroll->setFocusPolicy(Qt::NoFocus);layout->addWidget(settingsScroll,1);settingsScroll->hide();
+    settingsPage=new QWidget;settingsPage->setObjectName(QStringLiteral("settingsPage"));settingsScroll->setWidget(settingsPage);settingsPage->setAutoFillBackground(false);settingsScroll->viewport()->setAutoFillBackground(false);
     auto *settingsLayout=new QVBoxLayout(settingsPage);settingsLayout->setContentsMargins(20,16,20,12);settingsLayout->setSpacing(8);
     auto *label=new QLabel(QStringLiteral("Máximo de tarjetas"));settingsLayout->addWidget(label);
     presets=new QButtonGroup(this);auto *choices=new QHBoxLayout;choices->setSpacing(6);
@@ -216,6 +218,7 @@ Panel::Panel(History *history, const QString &settingsFile, const QString &autho
     auto makeLabel=[&](const QString &name) {auto *label=new StatusLabel;label->setObjectName(name);label->setWordWrap(true);return label;};
     countLabel=makeLabel(QStringLiteral("historyUsage"));settingsLayout->addWidget(countLabel);
     warningLabel=makeLabel(QStringLiteral("retentionWarning"));static_cast<StatusLabel*>(warningLabel)->setGlyph(QStringLiteral("warning"));settingsLayout->addWidget(warningLabel);
+    auto warningPolicy=warningLabel->sizePolicy();warningPolicy.setRetainSizeWhenHidden(true);warningLabel->setSizePolicy(warningPolicy);
     auto *saveRow=new QHBoxLayout;saveRow->setSpacing(12);saveButton=new QPushButton(QStringLiteral("Guardar"));saveButton->setObjectName(QStringLiteral("saveLimit"));saveButton->setFixedHeight(30);saveButton->setAutoDefault(false);saveRow->addWidget(saveButton);saveStatus=makeLabel(QStringLiteral("saveStatus"));saveRow->addWidget(saveStatus,1);settingsLayout->addLayout(saveRow);
     settingsLayout->addSpacing(12);divider=new QLabel;divider->setFixedHeight(1);settingsLayout->addWidget(divider);settingsLayout->addSpacing(12);
     auto *clearRow=new QHBoxLayout;clearRow->setSpacing(12);clearButton=new QPushButton(QStringLiteral("Borrar todo"));clearButton->setObjectName(QStringLiteral("clearAll"));clearButton->setFixedHeight(30);clearButton->setAutoDefault(false);clearRow->addWidget(clearButton);clearStatus=makeLabel(QStringLiteral("clearStatus"));clearRow->addWidget(clearStatus,1);settingsLayout->addLayout(clearRow);settingsLayout->addStretch();
@@ -227,7 +230,7 @@ Panel::Panel(History *history, const QString &settingsFile, const QString &autho
     applyStyle();
     connect(search,&QLineEdit::textChanged,this,[this]{refresh(true);});
     for(auto *child:findChildren<QWidget*>()) { child->setMouseTracking(true);child->installEventFilter(this); }
-    refresh(true);
+    updateSettings();updateMinimumHeight(width());refresh(true);
 }
 void Panel::applyStyle() {
     const auto window=palette().color(QPalette::Window),text=palette().color(QPalette::WindowText);
@@ -248,6 +251,7 @@ void Panel::applyStyle() {
         "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; border: none; background: none; }"
         "QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }")
         .arg(mix(window,text,.08).name(),mix(window,text,.35).name(),mix(window,text,.55).name(),palette().color(QPalette::Highlight).name()));
+    settingsScroll->setStyleSheet(list->styleSheet());
     // Qt stylesheets retain a separate viewport palette across theme changes.
     QPalette lp=palette();lp.setColor(QPalette::Base,window);list->setPalette(lp);list->viewport()->setPalette(lp);
 }
@@ -264,11 +268,13 @@ void Panel::prepareOpen(const QRect &availableArea) {
     adjustingSize=true;
     if(area.isValid()) { setMinimumSize(QSize(360,240).boundedTo(area.size()));setMaximumSize(area.size()); }
     adjustingSize=false;
+    updateSettings();
     resizeInternally(customSize?preferredSize:QSize(560,height()));
     search->clear();refresh(true);search->setFocus();
 }
 void Panel::resizeInternally(const QSize &size) {
     adjustingSize=true;
+    if(settingsPage)updateMinimumHeight(qBound(minimumWidth(),size.width(),maximumWidth()));
     const QSize target=size.expandedTo(minimumSize()).boundedTo(maximumSize());
     if (this->size()!=target) {
         pendingAutomaticSize=target;
@@ -291,19 +297,20 @@ void Panel::updateCardSizes() {
         const int rowHeight=cardHeight(item,delegate->previews.value(item.id).original,width-1,font(),item.id==delegate->last)+(row==list->count()-1?0:6)+(row==0?firstRowInset:0);
         list->item(row)->setSizeHint(QSize(width,rowHeight));height+=rowHeight;
     }
-    if(!customSize)resizeInternally(QSize(width==1?560:this->width(),qMin(760,header->height()+layout()->contentsMargins().bottom()+(list->count()?qMax(40,height):empty->minimumHeight()+firstRowInset))));
+    if(!customSize&&!preserveViewSize)resizeInternally(QSize(width==1?560:this->width(),qMin(760,header->height()+layout()->contentsMargins().bottom()+(list->count()?qMax(40,height):empty->minimumHeight()+firstRowInset))));
     list->doItemsLayout();list->viewport()->update();
 }
 void Panel::resizeEvent(QResizeEvent *event) {
     QWidget::resizeEvent(event);
     const bool automatic=adjustingSize||event->size()==pendingAutomaticSize;
     pendingAutomaticSize={}; // Suppress only the pending internal resize, not this size forever.
+    if(settingsPage) {const bool wasAdjusting=adjustingSize;adjustingSize=true;updateMinimumHeight(width());adjustingSize=wasAdjusting;updateSettingsHeight();}
     if(isVisible()&&!automatic) {
-        customSize=true;preferredSize=event->size();if(settingsVisible)listSize=event->size();
+        customSize=true;preferredSize=size();
         QSettings settings(settingsFile,QSettings::IniFormat);
         settings.setValue(QStringLiteral("Window/size"),preferredSize);settings.sync();
     }
-    if(settingsVisible)growSettings();else queueCardSizes();
+    if(!settingsVisible)queueCardSizes();
 }
 Qt::Edges Panel::resizeEdges(const QPoint &position) const {
     Qt::Edges edges;
@@ -316,24 +323,29 @@ Qt::Edges Panel::resizeEdges(const QPoint &position) const {
 void Panel::showSettings(bool show) {
     if(authorizationPending||show==settingsVisible)return;
     settingsVisible=show;
-    if(show)listSize=size();
     title->setText(show?QStringLiteral("Ajustes"):QStringLiteral("Portapapeles"));
     auto *head=qobject_cast<QHBoxLayout*>(title->parentWidget()->layout());head->setContentsMargins(show?0:12,0,0,0);head->setSpacing(show?6:0);
-    header->setFixedHeight(show?49:89);search->setVisible(!show);settingsButton->setVisible(!show);backButton->setVisible(show);settingsPage->setVisible(show);
+    header->setFixedHeight(show?49:89);search->setVisible(!show);settingsButton->setVisible(!show);backButton->setVisible(show);settingsScroll->setVisible(show);
     listPage->setVisible(!show);setFocusProxy(show?nullptr:search);setFocusPolicy(show?Qt::ClickFocus:Qt::StrongFocus);
     saveStatus->clear();clearStatus->clear();static_cast<StatusLabel*>(saveStatus)->setGlyph({});
     selectedLimit=history->maxUnpinned();
     if(show) {
-        updateSettings();list->hide();empty->hide();layout()->activate();growSettings();presets->checkedButton()->setFocus();
+        updateSettings();list->hide();empty->hide();layout()->activate();updateSettingsHeight();presets->checkedButton()->setFocus();
     } else {
-        resizeInternally(listSize);refresh();search->setFocus();
+        // refresh() already kept the hidden list current. Returning must not autosize it.
+        preserveViewSize=true;list->setVisible(list->count()>0);empty->setVisible(list->count()==0);
+        layout()->activate();updateCardSizes();search->setFocus();
     }
     update();
 }
-void Panel::growSettings() {
-    if(!settingsVisible)return;
-    const int needed=header->height()+settingsPage->layout()->totalHeightForWidth(width())+layout()->contentsMargins().bottom();
-    if(height()<needed)resizeInternally(QSize(width(),needed));
+void Panel::updateMinimumHeight(int width) {
+    // KWin places the final minimum size before opening either view.
+    const int needed=49+settingsPage->layout()->totalHeightForWidth(width)+layout()->contentsMargins().bottom();
+    setMinimumHeight(qMin(maximumHeight(),qMax(240,needed)));
+}
+void Panel::updateSettingsHeight() {
+    settingsPage->layout()->invalidate();
+    settingsPage->setMinimumHeight(settingsPage->layout()->totalHeightForWidth(settingsScroll->viewport()->width()));
 }
 void Panel::updateSettings() {
     const auto usage=history->usage();const int saved=history->maxUnpinned();
@@ -355,7 +367,7 @@ void Panel::updateSettings() {
     auto statusPalette=[&](QLabel *label,bool neutral) {QPalette p=palette();if(neutral)p.setColor(QPalette::WindowText,palette().color(QPalette::Disabled,QPalette::Text));label->setPalette(p);};
     statusPalette(saveStatus,saveStatus->text().startsWith(QStringLiteral("De "))||saveStatus->text()==QStringLiteral("Esperando la contraseña…"));
     statusPalette(clearStatus,clearStatus->text().startsWith(QStringLiteral("Solo "))||clearStatus->text()==QStringLiteral("No hay tarjetas para borrar.")||clearStatus->text()==QStringLiteral("Esperando la contraseña…"));
-    if(settingsVisible){settingsPage->layout()->invalidate();layout()->activate();growSettings();}
+    updateSettingsHeight();
 }
 void Panel::requestClear() {if(clearButton->isEnabled())requestAuthorization(false);}
 void Panel::requestSave() {if(saveButton->isEnabled())requestAuthorization(true);}
@@ -402,6 +414,7 @@ void Panel::finishAuthorization(int result) {
     if(!savingLimit&&clearButton->isEnabled())clearButton->setFocus();else presets->checkedButton()->setFocus();
 }
 void Panel::refresh(bool selectNewest) {
+    preserveViewSize=false;
     const QString selected=selectNewest?QString():currentId(); const int oldRow=list->currentRow(); const int scroll=list->verticalScrollBar()->value();
     auto *delegate=static_cast<CardDelegate*>(list->itemDelegate());delegate->entries=history->items(search->text());delegate->last=history->lastChosen();delegate->filter=search->text();delegate->theme=palette();
     QSet<QString> visibleIds;
@@ -441,6 +454,7 @@ bool Panel::handleKey(QKeyEvent *e) {
     }
     if(settingsVisible) {
         if(e->key()==Qt::Key_Return||e->key()==Qt::Key_Enter) {
+            if(e->isAutoRepeat())return true;
             if(!authorizationPending){if(clearButton->hasFocus())requestClear();else if(saveButton->isEnabled()&&(saveButton->hasFocus()||presets->buttons().contains(qobject_cast<QAbstractButton*>(focusWidget()))))requestSave();}return true;
         }
         return false;
@@ -467,7 +481,7 @@ bool Panel::eventFilter(QObject *obj,QEvent *e) {
             setCursor(cursor);widget->setCursor(cursor);
         }
         if(e->type()==QEvent::MouseButtonPress)resizing=false;
-        if(e->type()==QEvent::MouseButtonPress&&mouse->button()==Qt::LeftButton&&edges&&obj!=list->verticalScrollBar()) {
+        if(e->type()==QEvent::MouseButtonPress&&mouse->button()==Qt::LeftButton&&edges&&obj!=list->verticalScrollBar()&&obj!=settingsScroll->verticalScrollBar()) {
             resizing=windowHandle()&&windowHandle()->startSystemResize(edges);return true;
         }
         if(e->type()==QEvent::MouseButtonPress&&mouse->button()==Qt::LeftButton&&!edges&&header->geometry().contains(position)&&!(search->isVisible()&&search->rect().contains(search->mapFrom(this,position)))&&!(settingsButton->isVisible()&&settingsButton->rect().contains(settingsButton->mapFrom(this,position)))&&!(backButton->isVisible()&&backButton->rect().contains(backButton->mapFrom(this,position)))) {
