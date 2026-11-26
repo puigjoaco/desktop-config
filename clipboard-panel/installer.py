@@ -20,6 +20,7 @@ KLIPPER = ["plasmashell", "show-on-mouse-pos", "Plasma", "Show Clipboard at Mous
 PANEL = ["clipboard-panel", "show-history", "Portapapeles", "Portapapeles"]
 UNIT = "clipboard-panel.service"
 POLICY = "org.local.clipboard-panel.clear-history.policy"
+LIMIT_POLICY = "org.local.clipboard-panel.change-limit.policy"
 POLICY_DIRECTORY = Path("/usr/share/polkit-1/actions")
 FILES = [".local/libexec/clipboard-panel", ".config/systemd/user/clipboard-panel.service",
          ".local/share/applications/org.local.clipboard-panel.desktop"]
@@ -187,19 +188,24 @@ class Installer:
         config_home = Path(os.environ.get("XDG_CONFIG_HOME", self.home / ".config")) if self.home == Path.home() else self.home / ".config"
         self.klipper = KlipperConfig(config_home / "klipperrc")
         self.policy = Path(policy_directory) / POLICY
+        self.limit_policy = Path(policy_directory) / LIMIT_POLICY
 
-    def policy_snapshot(self):
-        if self.policy.is_symlink() or (self.policy.exists() and not self.policy.is_file()):
-            raise RuntimeError(f"Refusing non-regular policy: {self.policy}")
-        expected = digest(self.source / POLICY)
-        if self.policy.exists() and digest(self.policy) != expected:
-            raise RuntimeError(f"Existing polkit policy differs: {self.policy}")
-        return {"owned": not self.policy.exists(), "sha256": expected}
+    def policy_snapshot(self, policy=None):
+        policy = self.policy if policy is None else policy
+        if policy.is_symlink() or (policy.exists() and not policy.is_file()):
+            raise RuntimeError(f"Refusing non-regular policy: {policy}")
+        expected = digest(self.source / policy.name)
+        if policy.exists() and digest(policy) != expected:
+            raise RuntimeError(f"Existing polkit policy differs: {policy}")
+        return {"owned": not policy.exists(), "sha256": expected}
+
+    def policy_entries(self, saved):
+        return [(self.policy, saved.get("policy")), (self.limit_policy, saved.get("limit_policy"))]
 
     def check_policy(self, saved):
-        info = saved.get("policy")
-        if info and self.policy.exists() and (self.policy.is_symlink() or digest(self.policy) != info["sha256"]):
-            raise RuntimeError(f"Managed polkit policy changed: {self.policy}")
+        for policy, info in self.policy_entries(saved):
+            if info and (policy.is_symlink() or (policy.exists() and (not policy.is_file() or digest(policy) != info["sha256"]))):
+                raise RuntimeError(f"Managed polkit policy changed: {policy}")
 
     def privileged(self, *args):
         try:
@@ -209,8 +215,9 @@ class Installer:
 
     def install_policy(self, saved):
         self.check_policy(saved)
-        if not self.policy.exists():
-            self.privileged("install", "-m", "0644", "--", self.source / POLICY, self.policy)
+        for policy, info in self.policy_entries(saved):
+            if info and not policy.exists():
+                self.privileged("install", "-m", "0644", "--", self.source / policy.name, policy)
 
     def reload_klipper(self):
         self.runner(["busctl", "--user", "call", "org.kde.klipper", "/klipper",
@@ -254,6 +261,7 @@ class Installer:
             saved["files"][rel] = info
         saved["klipper"] = self.klipper.snapshot()
         saved["policy"] = self.policy_snapshot()
+        saved["limit_policy"] = self.policy_snapshot(self.limit_policy)
         return saved
 
     def restore(self, saved):
@@ -264,8 +272,17 @@ class Installer:
         self.check_policy(saved)
         self.klipper.lines()  # Validate before restoring any desktop state.
         # Fail before teardown if privilege is unavailable, leaving a retryable install.
-        if saved.get("policy", {}).get("owned") and self.policy.exists():
-            self.privileged("rm", "--", self.policy)
+        removed = []
+        try:
+            for policy, info in reversed(self.policy_entries(saved)):
+                if info and info["owned"] and policy.exists():
+                    self.privileged("rm", "--", policy)
+                    removed.append(policy)
+        except BaseException:
+            # A partial two-policy teardown must leave the installation retryable.
+            for policy in removed:
+                self.privileged("install", "-m", "0644", "--", self.source / policy.name, policy)
+            raise
         self.stop_if_running()
         self.shortcuts.restore(saved["shortcuts"])
         self.service("disable", UNIT, check=False)
@@ -297,6 +314,8 @@ class Installer:
                 saved["klipper"] = self.klipper.snapshot()
             if "policy" not in saved:
                 saved["policy"] = self.policy_snapshot()
+            if "limit_policy" not in saved:
+                saved["limit_policy"] = self.policy_snapshot(self.limit_policy)
             atomic_json(self.manifest, saved)
         else:
             saved = self.backup()
@@ -369,8 +388,9 @@ def main():
         for rel in FILES:
             print("Managed file:", home / rel)
         print("Klipper: record previous [General] MaxClipItems in ~/.config/klipperrc; set MaxClipItems=100 only if lower or unset (never lowered); call org.kde.klipper /klipper org.kde.klipper.klipper reloadConfig.")
-        print("Polkit: sudo -n install -m 0644", source / POLICY, POLICY_DIRECTORY / POLICY)
-        print("Polkit: auth_self for active users on EVERY Borrar todo; inactive/other sessions denied. Plasma handles the password.")
+        for policy in (POLICY, LIMIT_POLICY):
+            print("Polkit: sudo -n install -m 0644", source / policy, POLICY_DIRECTORY / policy)
+        print("Polkit: auth_self for active users on EVERY Guardar and Borrar todo; inactive/other sessions denied. Plasma handles the password.")
         print("Uninstall/rollback: restore previous MaxClipItems (or remove the added key/file) unless it was changed since, reload Klipper; sudo -n remove only the policy installed by this installer.")
         print("Private backups + exact four-chord shortcut snapshot:", home / ".local/state/clipboard-panel")
         print("Read Meta+V owners; abort on any owner except plasmashell/show-on-mouse-pos and clipboard-panel/show-history.")

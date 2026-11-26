@@ -8,6 +8,8 @@ class QLabel;
 class QKeyEvent;
 class QProcess;
 class QAction;
+class QToolButton;
+class QButtonGroup;
 namespace Clip {
 class Panel final : public QWidget {
     Q_OBJECT
@@ -34,7 +36,12 @@ private:
     void queueCardSizes();
     void resizeInternally(const QSize &size);
     void requestClear();
-    void finishAuthorization(bool authorized);
+    void requestSave();
+    void requestAuthorization(bool saving);
+    void finishAuthorization(int result);
+    void showSettings(bool show);
+    void updateSettings();
+    void growSettings();
     History *history;
     QListWidget *list = nullptr;
     QWidget *header = nullptr;
@@ -42,6 +49,22 @@ private:
     QAction *searchIcon = nullptr;
     QPushButton *clearButton = nullptr;
     QLabel *empty = nullptr;
+    QLabel *title = nullptr;
+    QToolButton *settingsButton = nullptr;
+    QToolButton *backButton = nullptr;
+    QWidget *settingsPage = nullptr;
+    QWidget *listPage = nullptr;
+    QButtonGroup *presets = nullptr;
+    QPushButton *saveButton = nullptr;
+    QLabel *countLabel = nullptr;
+    QLabel *warningLabel = nullptr;
+    QLabel *saveStatus = nullptr;
+    QLabel *clearStatus = nullptr;
+    QLabel *divider = nullptr;
+    bool settingsVisible = false;
+    bool savingLimit = false;
+    int selectedLimit = 100;
+    QSize listSize;
     QString settingsFile;
     QString authorizationProgram;
     QProcess *authorization = nullptr;

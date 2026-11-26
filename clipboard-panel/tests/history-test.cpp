@@ -52,6 +52,24 @@ private slots:
         QCOMPARE(h.items().first().id,QString("104"));QCOMPARE(h.items().last().id,QString("5"));
         for(const auto &item:h.items())QVERIFY(h.choose(item.id));
     }
+    void persistedLimitAndRetention() {
+        QTemporaryDir dir;
+        QVector<Item> entries;auto pin=textItem("pinned",0);pin.pinned=true;entries<<pin;
+        for(int i=0;i<230;++i)entries<<textItem(QString::number(i),i+1);
+        {
+            History h(dir.path());QCOMPARE(h.maxUnpinned(),100);QCOMPARE(h.setMaxUnpinned(200),0);QVERIFY(h.merge(entries));
+            QCOMPARE(h.usage().unpinned,200);QCOMPARE(h.usage().pinned,1);QVERIFY(h.usage().bytes>0);
+            QCOMPARE(h.setMaxUnpinned(50),150);QCOMPARE(h.maxUnpinned(),50);QCOMPARE(h.items().last().id,QString("pinned"));QVERIFY(!h.choose("179"));QVERIFY(h.choose("180"));
+            QCOMPARE(h.setMaxUnpinned(500),0);QVERIFY(h.merge(entries));QCOMPARE(h.usage().unpinned,50); // tombstones never revive
+            QVERIFY(h.merge({textItem("new",1000)}));QCOMPARE(h.usage().unpinned,51);
+            QCOMPARE(h.setMaxUnpinned(50),1);QVERIFY(h.pin("pinned"));QCOMPARE(h.usage().unpinned,50);QVERIFY(!h.choose("pinned"));
+            QCOMPARE(h.setMaxUnpinned(99),-1);QCOMPARE(h.maxUnpinned(),50);
+        }
+        History h(dir.path());QCOMPARE(h.maxUnpinned(),50);QCOMPARE(h.usage().unpinned,50);
+        const QString connection="invalid-limit";
+        {auto db=QSqlDatabase::addDatabase("QSQLITE",connection);db.setDatabaseName(dir.filePath("history.sqlite"));QVERIFY(db.open());QSqlQuery q(db);QVERIFY(q.exec("UPDATE settings SET value='71' WHERE key='maxUnpinned'"));}
+        QSqlDatabase::removeDatabase(connection);QCOMPARE(h.maxUnpinned(),100);
+    }
     void listingUsesMetadataAndBoundedPreviews() {
         QTemporaryDir dir;History h(dir.path());
         auto text=textItem("text",2,"Needle");
@@ -71,7 +89,7 @@ private slots:
     }
     void failedCommitRollsBack_data() {
         QTest::addColumn<QString>("operation");
-        for(const auto &operation:QStringList{"merge","pin","remove","clear"})QTest::newRow(qPrintable(operation))<<operation;
+        for(const auto &operation:QStringList{"merge","pin","remove","clear","limit"})QTest::newRow(qPrintable(operation))<<operation;
     }
     void failedCommitRollsBack() {
         QFETCH(QString,operation);QTemporaryDir dir;History h(dir.path());QVERIFY(h.merge({textItem("a",1)}));
@@ -79,6 +97,7 @@ private slots:
             if(operation=="merge")return h.merge({textItem("b",2)});
             if(operation=="pin")return h.pin("a");
             if(operation=="remove")return h.remove("a");
+            if(operation=="limit")return h.setMaxUnpinned(50)>=0;
             return h.clear();
         };
         const QString connection="commit-lock";
@@ -87,13 +106,14 @@ private slots:
             QVERIFY(reader.transaction());QSqlQuery lock(reader);QVERIFY(lock.exec("SELECT * FROM items"));QVERIFY(lock.next());
             // A reader allows the write transaction to begin but blocks its COMMIT.
             QVERIFY(!act());QVERIFY(!h.error().isEmpty());
-            QCOMPARE(ids(h.items()),QStringList({"a"}));QVERIFY(!h.items().first().pinned);
+            QCOMPARE(ids(h.items()),QStringList({"a"}));QVERIFY(!h.items().first().pinned);QCOMPARE(h.maxUnpinned(),100);
             lock.finish();QVERIFY(reader.rollback());reader.close();
         }
         QSqlDatabase::removeDatabase(connection);
         QVERIFY(act()); // A failed COMMIT must not poison the next transaction.
         if(operation=="merge")QCOMPARE(ids(h.items()),QStringList({"b","a"}));
         else if(operation=="pin")QVERIFY(h.items().first().pinned);
+        else if(operation=="limit")QCOMPARE(h.maxUnpinned(),50);
         else QVERIFY(h.items().isEmpty());
     }
     void textCleanup() {

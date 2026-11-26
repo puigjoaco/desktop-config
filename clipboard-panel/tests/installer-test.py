@@ -203,13 +203,104 @@ class InstallerTest(unittest.TestCase):
             shutil.copyfile(SOURCE / m.POLICY, installer.policy)
             installer.uninstall();self.assertTrue(installer.policy.exists())
 
+    def test_upgrade_from_clear_only_installs_new_policy_and_restores_exact_state(self):
+        for preexisting in (False, True):
+            with self.subTest(preexisting=preexisting), tempfile.TemporaryDirectory() as home:
+                installer, binary, *_ = self.setup_install(home)
+                if preexisting:
+                    installer.policy.parent.mkdir()
+                    shutil.copyfile(SOURCE / m.POLICY, installer.policy)
+                    shutil.copyfile(SOURCE / m.LIMIT_POLICY, installer.limit_policy)
+                installer.install(binary)
+                saved = installer.load()
+                # Today's installation: unchanged clear policy and no limit-policy snapshot.
+                saved.pop("limit_policy")
+                if not preexisting:
+                    installer.limit_policy.unlink()
+                m.atomic_json(installer.manifest, saved)
+                old_clear = installer.policy.read_bytes()
+                old_files = copy.deepcopy(saved["files"])
+                installer.install(binary)
+                self.assertEqual(installer.policy.read_bytes(), old_clear)
+                self.assertEqual(installer.limit_policy.read_bytes(), (SOURCE / m.LIMIT_POLICY).read_bytes())
+                self.assertEqual(installer.load()["files"], old_files)
+                self.assertEqual(installer.load()["limit_policy"]["owned"], not preexisting)
+                installer.install(binary)
+                installer.uninstall()
+                self.assertEqual(installer.policy.exists(), preexisting)
+                self.assertEqual(installer.limit_policy.exists(), preexisting)
+                if preexisting:
+                    self.assertEqual(installer.policy.read_bytes(), old_clear)
+                    self.assertEqual(installer.limit_policy.read_bytes(), (SOURCE / m.LIMIT_POLICY).read_bytes())
+
+    def test_upgrade_failure_removes_only_new_policy_and_retains_original_snapshots(self):
+        with tempfile.TemporaryDirectory() as home:
+            installer, binary, *_ = self.setup_install(home)
+            installer.policy.parent.mkdir()
+            shutil.copyfile(SOURCE / m.POLICY, installer.policy)
+            installer.install(binary)
+            saved = installer.load(); saved.pop("limit_policy");installer.limit_policy.unlink()
+            m.atomic_json(installer.manifest, saved)
+            old_clear = installer.policy.read_bytes()
+            def fail(_):
+                raise RuntimeError("synthetic upgrade failure")
+            installer.shortcuts.handover = fail
+            with self.assertRaisesRegex(RuntimeError, "synthetic upgrade failure"):
+                installer.install(binary)
+            self.assertFalse(installer.limit_policy.exists())
+            self.assertEqual(installer.policy.read_bytes(), old_clear)
+            self.assertEqual(installer.load()["files"], saved["files"])
+            self.assertEqual(installer.load()["shortcuts"], saved["shortcuts"])
+
+    def test_second_policy_removal_failure_restores_first_removed_policy(self):
+        with tempfile.TemporaryDirectory() as home:
+            installer, binary, *_ = self.setup_install(home);installer.install(binary)
+            original = installer.runner
+            def refuse_clear_removal(args, check=True):
+                if args[:3] == ["sudo", "-n", "rm"] and args[-1] == installer.policy:
+                    raise subprocess.CalledProcessError(1, args)
+                return original(args, check)
+            installer.runner = refuse_clear_removal
+            with self.assertRaisesRegex(RuntimeError, "passwordless sudo"):
+                installer.uninstall()
+            self.assertEqual(installer.limit_policy.read_bytes(), (SOURCE / m.LIMIT_POLICY).read_bytes())
+            self.assertTrue(installer.policy.exists());self.assertTrue(installer.load()["complete"])
+            installer.runner = original;installer.uninstall()
+            self.assertFalse(installer.limit_policy.exists());self.assertFalse(installer.policy.exists())
+
+    def test_existing_limit_policy_modified_or_foreign_is_refused(self):
+        with tempfile.TemporaryDirectory() as home:
+            installer, binary, *_ = self.setup_install(home)
+            installer.limit_policy.parent.mkdir();installer.limit_policy.write_text("foreign policy")
+            with self.assertRaisesRegex(RuntimeError, "Existing polkit policy differs"):
+                installer.install(binary)
+            self.assertEqual(installer.limit_policy.read_text(), "foreign policy")
+            installer.limit_policy.unlink();installer.install(binary)
+            installer.limit_policy.write_text("user edit")
+            with self.assertRaisesRegex(RuntimeError, "Managed polkit policy changed"):
+                installer.install(binary)
+            with self.assertRaisesRegex(RuntimeError, "Managed polkit policy changed"):
+                installer.uninstall()
+            self.assertEqual(installer.limit_policy.read_text(), "user edit")
+
+    def test_dangling_managed_policy_symlink_is_refused(self):
+        with tempfile.TemporaryDirectory() as home:
+            installer, binary, *_ = self.setup_install(home);installer.install(binary)
+            installer.limit_policy.unlink();installer.limit_policy.symlink_to(Path(home) / "missing")
+            with self.assertRaisesRegex(RuntimeError, "Managed polkit policy changed"):
+                installer.install(binary)
+            with self.assertRaisesRegex(RuntimeError, "Managed polkit policy changed"):
+                installer.uninstall()
+            self.assertFalse((Path(home) / "missing").exists())
+
     def test_policy_authentication_defaults(self):
-        root = ET.parse(SOURCE / m.POLICY).getroot()
-        action = root.find("action");self.assertEqual(action.attrib["id"], "org.local.clipboard-panel.clear-history")
-        defaults = action.find("defaults")
-        self.assertEqual(defaults.findtext("allow_active"), "auth_self")
-        self.assertEqual(defaults.findtext("allow_inactive"), "no")
-        self.assertEqual(defaults.findtext("allow_any"), "no")
+        for name, action_id in ((m.POLICY, "clear-history"), (m.LIMIT_POLICY, "change-limit")):
+            root = ET.parse(SOURCE / name).getroot()
+            action = root.find("action");self.assertEqual(action.attrib["id"], "org.local.clipboard-panel." + action_id)
+            defaults = action.find("defaults")
+            self.assertEqual(defaults.findtext("allow_active"), "auth_self")
+            self.assertEqual(defaults.findtext("allow_inactive"), "no")
+            self.assertEqual(defaults.findtext("allow_any"), "no")
 
     def test_sudo_failure_is_clear_and_does_not_install(self):
         with tempfile.TemporaryDirectory() as home:

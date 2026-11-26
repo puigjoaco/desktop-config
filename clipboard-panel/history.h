@@ -41,13 +41,18 @@ public:
     bool pin(const QString &id);
     bool remove(const QString &id);
     bool clear();
+    int maxUnpinned() const;
+    // Atomically persist the limit and remove oldest unpinned cards; -1 on failure.
+    int setMaxUnpinned(int limit);
+    struct Usage { int unpinned = 0; int pinned = 0; qint64 bytes = 0; };
+    Usage usage() const;
     QString lastChosen() const;
     QSet<QString> knownIds() const;
 private:
     QSqlDatabase db;
     QString connection;
     mutable QString lastError;
-    bool enforceRetention();
+    bool enforceRetention(int limit);
     bool execute(const QString &sql, const QVariantList &args = {});
     bool finishTransaction(bool ok);
 };

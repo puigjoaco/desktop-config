@@ -18,10 +18,17 @@ no terminó de guardarse, se vuelve a intentar sin cambiar la fecha original.
 - Supr: eliminar la tarjeta seleccionada si la búsqueda está vacía; con texto, borrar hacia delante.
   Ctrl+P: fijar o desfijar, también al filtrar. Tab y Mayús+Tab mantienen el foco en la búsqueda.
 - Esc borra el filtro; otro Esc cierra. Durante la autorización de polkit, Esc la cancela.
+- El engranaje de la cabecera o Ctrl+, abre Ajustes dentro del panel. Esc o Volver regresa
+  a la lista y descarta los cambios pendientes. En Ajustes, Tab recorre los controles;
+  ← / → elige un preset y Enter sobre los presets o Guardar guarda el cambio.
+- Ajustes ofrece 50 · 100 · 200 · 500 tarjetas no fijadas (100 por defecto), el número de
+  tarjetas y fijados y el tamaño de sus cargas. Si el panel es demasiado bajo, crece
+  temporalmente para mostrar los ajustes y recupera el tamaño anterior al volver.
 - Arrastrar la fila del título: mover la ventana durante esa apertura. La posición no se guarda;
   cada Meta+V vuelve a abrir junto al puntero.
 - Arrastrar cualquier borde o esquina: cambiar el tamaño; se recuerda al reabrir y reiniciar.
-- Borrar todo: solicita tu contraseña de Linux mediante el agente de polkit de Plasma.
+- Guardar y Borrar todo, en Ajustes, solicitan tu contraseña de Linux cada vez mediante
+  el agente de polkit de Plasma; elegir un preset no solicita autorización.
   Cancelar o fallar la autorización no borra nada; los fijados siempre se conservan.
 - Al pasar el puntero: botones Eliminar y Fijar.
 - «Último elegido» marca una tarjeta sin moverla.
@@ -29,8 +36,10 @@ no terminó de guardarse, se vuelve a intentar sin cambiar la fecha original.
 **Eliminar y Borrar todo afectan solo a este panel.** No borran el historial ni
 el portapapeles de Klipper. Borrar todo conserva los fijados. Las tarjetas
 eliminadas no reaparecen por una nueva lectura o una copia idéntica: se conserva
-su identificador como registro de eliminación. El límite es de 100 tarjetas no
-fijadas, más todos los fijados. Se preservan los formatos MIME disponibles en
+su identificador como registro de eliminación. El límite elegido en Ajustes se guarda
+junto al historial y excluye a los fijados. Al bajarlo, se avisa cuántas tarjetas
+antiguas se borrarán; el cambio y la retención solo se aplican juntos después de
+autorizar. Subirlo no recupera tarjetas eliminadas. Se preservan los formatos MIME disponibles en
 Klipper (incluidos HTML, enlaces y PNG), y se ofrece también la imagen decodificada
 a las aplicaciones Qt. Los formatos que Klipper no guardó no pueden recuperarse.
 
@@ -97,15 +106,17 @@ Conserva el valor anterior y lo restaura al desinstalar o revertir un fallo, sal
 que el límite se haya cambiado después (por ejemplo desde Mattux), sin sobrescribir
 otros ajustes posteriores.
 El panel guarda copias propias de los MIME: una expulsión de Klipper no elimina
-los datos ya importados. Se conservan las últimas 100 tarjetas no fijadas; los
-fijados no cuentan y nunca se expulsan. Al desfijar se vuelve a aplicar el límite.
+los datos ya importados. Se conservan las últimas tarjetas hasta el límite elegido en Ajustes (100 por defecto);
+los fijados no cuentan y nunca se expulsan. Al desfijar se vuelve a aplicar el límite.
 No se pueden recuperar las cargas que Klipper eliminó antes de importarlas.
 
-Instala la política `org.local.clipboard-panel.clear-history.policy` en
+Instala las políticas `org.local.clipboard-panel.clear-history.policy` y
+`org.local.clipboard-panel.change-limit.policy` en
 `/usr/share/polkit-1/actions/` con `sudo -n`: si sudo necesita contraseña, falla
 con un mensaje claro. Solo una sesión activa puede autorizar con `auth_self`,
-sin conservar la autorización para el próximo borrado. La aplicación nunca
-recibe la contraseña. La desinstalación elimina solo la política que instaló;
+sin conservar la autorización para el próximo Guardar o Borrar todo. La aplicación nunca
+recibe la contraseña. La actualización añade la segunda política aunque ya esté instalada la de borrado.
+La desinstalación o reversión elimina solo las políticas que instaló;
 si ya existía una política idéntica, la conserva. No se solicitan privilegios
 para borrar una tarjeta individual.
 
@@ -159,13 +170,22 @@ verificarse con el usuario presente, después de la revisión del orquestador:
    monitores y las tarjetas con un panel angosto y ancho. Arrastrar la fila del título,
    reabrir y confirmar que vuelve al puntero. Arrastrar la barra desde ambos extremos
    de su ancho y soltar cerca del borde: debe dejar de arrastrar normalmente.
-7. Pulsar Borrar todo: verificar que el panel permanece abierto al aparecer el
-   agente de polkit, cancelar y comprobar que no se borró nada. Repetir y autorizar:
-   solo permanecen los fijados. Volver a pulsar: debe pedir contraseña otra vez.
+7. Abrir el engranaje o Ctrl+, y probar los presets de Ajustes: elegir no debe
+   abrir el diálogo. Bajar el límite por debajo del número de tarjetas debe mostrar
+   el aviso. Pulsar Guardar: el panel permanece abierto al aparecer polkit; cancelar
+   revierte la selección sin guardar ni borrar. Repetir y autorizar: se guarda el
+   límite y desaparecen solo las tarjetas no fijadas más antiguas. Comprobar el
+   límite tras reiniciar y que subirlo no restaura lo eliminado. Verificar Esc,
+   Volver, flechas, Tab y Enter, y el crecimiento temporal con una ventana baja.
+   En Ajustes, pulsar Borrar todo, cancelar y luego autorizar: solo permanecen los
+   fijados. Cada acción debe pedir contraseña otra vez. Tras cerrar el diálogo,
+   verificar que KWin devuelve el foco al panel y que un clic fuera lo cierra.
 8. Desinstalar con `./install.sh --uninstall` y verificar que Meta+V vuelve a
    Klipper. Si cualquier monitor parpadea o cambia, detener inmediatamente la
    prueba y ejecutar el mismo rollback; no repetir sondas visuales.
 
 Las pruebas automatizadas verifican el modelo, los MIME y la lógica de
 instalación con dobles de D-Bus/systemd. No demuestran el comportamiento real
-de KWin, el arrastre Wayland, el agente de polkit ni el pegado entre aplicaciones; esas comprobaciones quedan pendientes.
+de KWin, el arrastre Wayland, el agente de polkit ni el pegado entre aplicaciones; esas comprobaciones quedan pendientes. La devolución de foco después del diálogo
+de contraseña debe comprobarla el usuario; las pruebas offscreen solo verifican
+el foco del control dentro del panel.

@@ -1,5 +1,9 @@
 #include "panel.h"
 #include <QApplication>
+#include <QButtonGroup>
+#include <QToolButton>
+#include <QLocale>
+#include <cmath>
 #include <QAction>
 #include <QEvent>
 #include <QFontMetrics>
@@ -39,6 +43,17 @@ static void icon(QPainter &p, QPointF at, const QString &kind, QColor color) {
         p.drawLine(QPointF(3,4),QPointF(13,4)); p.drawRect(QRectF(6,2,4,2)); p.drawPolyline(QPolygonF{{4,5},{5,14},{11,14},{12,5}}); p.drawLine(QPointF(7,7),QPointF(7,11)); p.drawLine(QPointF(9,7),QPointF(9,11));
     } else if (kind==QStringLiteral("pin")) {
         p.drawPolygon(QPolygonF{{10,2},{14,6},{12,7},{10,9},{10,12},{4,6},{7,6},{9,4}}); p.drawLine(QPointF(6,10),QPointF(2,14));
+    } else if (kind==QStringLiteral("gear")) {
+        QPolygonF points;for(int i=0;i<8;++i)for(const auto &v:QList<QPointF>{{4.9,-14},{6.6,-8},{6.6,8},{4.9,14}}) {
+            const double a=(45*i+v.y())*M_PI/180;points<<QPointF(8+v.x()*std::cos(a),8+v.x()*std::sin(a));
+        }
+        p.drawPolygon(points);p.drawEllipse(QPointF(8,8),2.1,2.1);
+    } else if (kind==QStringLiteral("back")) {
+        p.drawLine(QPointF(13,8),QPointF(3,8));p.drawPolyline(QPolygonF{{7.5,3.5},{3,8},{7.5,12.5}});
+    } else if (kind==QStringLiteral("check")) {
+        p.setPen(QPen(color,1.6,Qt::SolidLine,Qt::RoundCap,Qt::RoundJoin));p.drawPolyline(QPolygonF{{3,8.5},{6.5,12},{13,4.5}});
+    } else if (kind==QStringLiteral("warning")) {
+        p.drawPolygon(QPolygonF{{8,2},{14.5,13.5},{1.5,13.5}});p.drawLine(QPointF(8,6.5),QPointF(8,9.5));p.drawPoint(QPointF(8,11.6));
     } else if (kind==QStringLiteral("search")) {
         p.drawEllipse(QPointF(6.8,6.8),4.6,4.6);p.drawLine(QPointF(10.2,10.2),QPointF(14,14));
     } else {
@@ -46,6 +61,23 @@ static void icon(QPainter &p, QPointF at, const QString &kind, QColor color) {
     }
     p.restore();
 }
+static QIcon buttonIcon(const QString &kind, QColor color) {
+    QPixmap pix(32,32);pix.setDevicePixelRatio(2);pix.fill(Qt::transparent);QPainter p(&pix);p.setRenderHint(QPainter::Antialiasing);icon(p,{},kind,color);return QIcon(pix);
+}
+class StatusLabel final : public QLabel {
+public:
+    using QLabel::QLabel;
+    void setGlyph(const QString &value) { glyph=value;setIndent(glyph.isEmpty()?0:22);update(); }
+protected:
+    void paintEvent(QPaintEvent *event) override {
+        QLabel::paintEvent(event);
+        if(glyph.isEmpty())return;
+        QPainter p(this);p.setRenderHint(QPainter::Antialiasing);
+        icon(p,{0,1},glyph,glyph==QStringLiteral("warning")?QColor("#da4453"):palette().color(QPalette::Highlight));
+    }
+private:
+    QString glyph;
+};
 static constexpr int firstRowInset=8;
 static QRect cardRect(QRect row, int index, int count) { return row.adjusted(0,index==0?firstRowInset:0,-1,index==count-1?0:-6); }
 static QRect actionRect(const QRect &card, bool pin) { return QRect(card.right()-(pin?31:61),card.top()+4,28,28); }
@@ -165,17 +197,34 @@ Panel::Panel(History *history, const QString &settingsFile, const QString &autho
     auto *layout=new QVBoxLayout(this);layout->setContentsMargins(0,0,0,8);layout->setSpacing(0);
     header=new QWidget(this);header->setFixedHeight(89);auto *band=new QVBoxLayout(header);band->setContentsMargins(8,8,8,9);band->setSpacing(6);
     auto *titleRow=new QWidget(header);titleRow->setFixedHeight(32);auto *head=new QHBoxLayout(titleRow);head->setContentsMargins(12,0,0,0);band->addWidget(titleRow);
-    auto *title=new QLabel(QStringLiteral("Portapapeles"));QFont bold=f;bold.setWeight(QFont::DemiBold);title->setFont(bold);head->addWidget(title);head->addStretch();
-    clearButton=new QPushButton(QStringLiteral("Borrar todo"));clearButton->setFlat(true);clearButton->setFixedHeight(28);clearButton->setToolTip(QStringLiteral("Borrar solo de este panel; conserva los fijados"));head->addWidget(clearButton);layout->addWidget(header);
+    backButton=new QToolButton(titleRow);backButton->setObjectName(QStringLiteral("back"));backButton->setFixedSize(28,28);backButton->setAutoRaise(true);backButton->setToolTip(QStringLiteral("Volver (Esc)"));backButton->setAccessibleName(QStringLiteral("Volver"));backButton->hide();head->addWidget(backButton);
+    title=new QLabel(QStringLiteral("Portapapeles"));QFont bold=f;bold.setWeight(QFont::DemiBold);title->setFont(bold);head->addWidget(title);head->addStretch();
+    settingsButton=new QToolButton(titleRow);settingsButton->setObjectName(QStringLiteral("settings"));settingsButton->setFixedSize(28,28);settingsButton->setAutoRaise(true);settingsButton->setToolTip(QStringLiteral("Ajustes (Ctrl+,)"));settingsButton->setAccessibleName(QStringLiteral("Ajustes"));settingsButton->setFocusPolicy(Qt::NoFocus);head->addWidget(settingsButton);layout->addWidget(header);
     search=new QLineEdit(this);search->setObjectName(QStringLiteral("filter"));search->setAccessibleName(QStringLiteral("Filtrar portapapeles"));search->setClearButtonEnabled(true);search->setFixedHeight(34);search->setPlaceholderText(QStringLiteral("Buscar…"));search->setFocusPolicy(Qt::StrongFocus);searchIcon=search->addAction(QIcon(),QLineEdit::LeadingPosition);band->addWidget(search);setFocusProxy(search);
-    auto *body=new QVBoxLayout;body->setContentsMargins(8,0,8,0);body->setSpacing(0);layout->addLayout(body,1);
+    listPage=new QWidget(this);auto *body=new QVBoxLayout(listPage);body->setContentsMargins(8,0,8,0);body->setSpacing(0);layout->addWidget(listPage,1);
     list=new QListWidget(this);list->setObjectName(QStringLiteral("history"));list->setFrameShape(QFrame::NoFrame);list->setMouseTracking(true);list->setSelectionMode(QAbstractItemView::SingleSelection);list->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);list->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);list->setFocusPolicy(Qt::NoFocus);list->setItemDelegate(new CardDelegate(list));list->viewport()->setAttribute(Qt::WA_Hover);list->viewport()->installEventFilter(this);list->installEventFilter(this);list->setAccessibleName(QStringLiteral("Historial, más reciente primero"));
     body->addWidget(list,1);list->verticalScrollBar()->setFocusPolicy(Qt::NoFocus);
     empty=new EmptyLabel(this);empty->setAlignment(Qt::AlignCenter);empty->setMinimumHeight(152);body->addWidget(empty,1);
-    clearButton->setFocusPolicy(Qt::NoFocus);applyStyle();
-    clearButton->setObjectName(QStringLiteral("clearAll"));clearButton->setAutoDefault(false);
-    connect(clearButton,&QPushButton::clicked,this,&Panel::requestClear);
-    clearButton->installEventFilter(this);
+    settingsPage=new QWidget(this);settingsPage->setObjectName(QStringLiteral("settingsPage"));settingsPage->setSizePolicy(QSizePolicy::Preferred,QSizePolicy::Ignored);layout->addWidget(settingsPage,1);settingsPage->hide();
+    auto *settingsLayout=new QVBoxLayout(settingsPage);settingsLayout->setContentsMargins(20,16,20,12);settingsLayout->setSpacing(8);
+    auto *label=new QLabel(QStringLiteral("Máximo de tarjetas"));settingsLayout->addWidget(label);
+    presets=new QButtonGroup(this);auto *choices=new QHBoxLayout;choices->setSpacing(6);
+    for(int value:{50,100,200,500}) {
+        auto *button=new QPushButton(QString::number(value));button->setObjectName(QStringLiteral("limit%1").arg(value));button->setCheckable(true);button->setAutoDefault(false);button->setFixedSize(58,32);presets->addButton(button,value);choices->addWidget(button);
+    }
+    choices->addStretch();settingsLayout->addLayout(choices);
+    auto makeLabel=[&](const QString &name) {auto *label=new StatusLabel;label->setObjectName(name);label->setWordWrap(true);return label;};
+    countLabel=makeLabel(QStringLiteral("historyUsage"));settingsLayout->addWidget(countLabel);
+    warningLabel=makeLabel(QStringLiteral("retentionWarning"));static_cast<StatusLabel*>(warningLabel)->setGlyph(QStringLiteral("warning"));settingsLayout->addWidget(warningLabel);
+    auto *saveRow=new QHBoxLayout;saveRow->setSpacing(12);saveButton=new QPushButton(QStringLiteral("Guardar"));saveButton->setObjectName(QStringLiteral("saveLimit"));saveButton->setFixedHeight(30);saveButton->setAutoDefault(false);saveRow->addWidget(saveButton);saveStatus=makeLabel(QStringLiteral("saveStatus"));saveRow->addWidget(saveStatus,1);settingsLayout->addLayout(saveRow);
+    settingsLayout->addSpacing(12);divider=new QLabel;divider->setFixedHeight(1);settingsLayout->addWidget(divider);settingsLayout->addSpacing(12);
+    auto *clearRow=new QHBoxLayout;clearRow->setSpacing(12);clearButton=new QPushButton(QStringLiteral("Borrar todo"));clearButton->setObjectName(QStringLiteral("clearAll"));clearButton->setFixedHeight(30);clearButton->setAutoDefault(false);clearRow->addWidget(clearButton);clearStatus=makeLabel(QStringLiteral("clearStatus"));clearRow->addWidget(clearStatus,1);settingsLayout->addLayout(clearRow);settingsLayout->addStretch();
+    QFont small=f;small.setPointSize(9);saveStatus->setFont(small);clearStatus->setFont(small);
+    connect(presets,&QButtonGroup::idToggled,this,[this](int value,bool checked){if(!checked)return;selectedLimit=value;saveStatus->clear();clearStatus->clear();static_cast<StatusLabel*>(saveStatus)->setGlyph({});updateSettings();});
+    connect(settingsButton,&QToolButton::clicked,this,[this]{showSettings(true);});connect(backButton,&QToolButton::clicked,this,[this]{showSettings(false);});
+    connect(clearButton,&QPushButton::clicked,this,&Panel::requestClear);connect(saveButton,&QPushButton::clicked,this,&Panel::requestSave);
+    QWidget::setTabOrder(presets->button(50),presets->button(100));QWidget::setTabOrder(presets->button(100),presets->button(200));QWidget::setTabOrder(presets->button(200),presets->button(500));QWidget::setTabOrder(presets->button(500),saveButton);QWidget::setTabOrder(saveButton,clearButton);QWidget::setTabOrder(clearButton,backButton);
+    applyStyle();
     connect(search,&QLineEdit::textChanged,this,[this]{refresh(true);});
     for(auto *child:findChildren<QWidget*>()) { child->setMouseTracking(true);child->installEventFilter(this); }
     refresh(true);
@@ -184,6 +233,12 @@ void Panel::applyStyle() {
     const auto window=palette().color(QPalette::Window),text=palette().color(QPalette::WindowText);
     QPalette ep=palette();ep.setColor(QPalette::WindowText,palette().color(QPalette::Disabled,QPalette::Text));empty->setPalette(ep);
     QPixmap glyph(32,32);glyph.setDevicePixelRatio(2);glyph.fill(Qt::transparent);QPainter painter(&glyph);painter.setRenderHint(QPainter::Antialiasing);icon(painter,{},QStringLiteral("search"),palette().color(QPalette::PlaceholderText));painter.end();searchIcon->setIcon(QIcon(glyph));
+    // Breeze's native checked push button is gray; make the saved/selected preset clear.
+    const auto highlight=palette().color(QPalette::Highlight);
+    for(auto *button:presets->buttons())button->setStyleSheet(QStringLiteral("QPushButton:enabled:checked { background: %1; border: 1px solid %2; border-radius: 4px; } QPushButton:enabled:checked:focus { border: 2px solid %2; }").arg(mix(palette().color(QPalette::Button),highlight,.25).name(),highlight.name()));
+    settingsButton->setIcon(buttonIcon(QStringLiteral("gear"),text));backButton->setIcon(buttonIcon(QStringLiteral("back"),text));clearButton->setIcon(buttonIcon(QStringLiteral("delete"),text));
+    QPalette muted=palette();muted.setColor(QPalette::WindowText,palette().color(QPalette::Disabled,QPalette::Text));countLabel->setPalette(muted);
+    divider->setAutoFillBackground(true);QPalette line=palette();line.setColor(QPalette::Window,mix(window,text,.14));divider->setPalette(line);
     list->setStyleSheet(QStringLiteral(
         "QScrollBar:vertical { width: 14px; background: transparent; margin: 0; }"
         "QScrollBar:vertical:hover { background: %1; border-radius: 7px; }"
@@ -199,6 +254,7 @@ void Panel::applyStyle() {
 QString Panel::currentId() const { auto *item=list->currentItem();return item?item->data(Qt::UserRole).toString():QString(); }
 QString Panel::filter() const { return search->text(); }
 void Panel::prepareOpen(const QRect &availableArea) {
+    if(settingsVisible)showSettings(false);
     QRect area=availableArea;
     if(!area.isValid()) {
         auto *screen=QGuiApplication::screenAt(QCursor::pos());
@@ -226,7 +282,7 @@ void Panel::queueCardSizes() {
     QTimer::singleShot(0,this,[this]{cardSizesPending=false;updateCardSizes();});
 }
 void Panel::updateCardSizes() {
-    if(!list)return;
+    if(!list||settingsVisible)return;
     auto *delegate=static_cast<CardDelegate*>(list->itemDelegate());
     const int width=qMax(1,list->viewport()->width());
     int height=0;
@@ -243,11 +299,11 @@ void Panel::resizeEvent(QResizeEvent *event) {
     const bool automatic=adjustingSize||event->size()==pendingAutomaticSize;
     pendingAutomaticSize={}; // Suppress only the pending internal resize, not this size forever.
     if(isVisible()&&!automatic) {
-        customSize=true;preferredSize=event->size();
+        customSize=true;preferredSize=event->size();if(settingsVisible)listSize=event->size();
         QSettings settings(settingsFile,QSettings::IniFormat);
         settings.setValue(QStringLiteral("Window/size"),preferredSize);settings.sync();
     }
-    queueCardSizes();
+    if(settingsVisible)growSettings();else queueCardSizes();
 }
 Qt::Edges Panel::resizeEdges(const QPoint &position) const {
     Qt::Edges edges;
@@ -257,35 +313,93 @@ Qt::Edges Panel::resizeEdges(const QPoint &position) const {
     else if(position.y()>=height()-6)edges|=Qt::BottomEdge;
     return edges;
 }
-void Panel::requestClear() {
+void Panel::showSettings(bool show) {
+    if(authorizationPending||show==settingsVisible)return;
+    settingsVisible=show;
+    if(show)listSize=size();
+    title->setText(show?QStringLiteral("Ajustes"):QStringLiteral("Portapapeles"));
+    auto *head=qobject_cast<QHBoxLayout*>(title->parentWidget()->layout());head->setContentsMargins(show?0:12,0,0,0);head->setSpacing(show?6:0);
+    header->setFixedHeight(show?49:89);search->setVisible(!show);settingsButton->setVisible(!show);backButton->setVisible(show);settingsPage->setVisible(show);
+    listPage->setVisible(!show);setFocusProxy(show?nullptr:search);setFocusPolicy(show?Qt::ClickFocus:Qt::StrongFocus);
+    saveStatus->clear();clearStatus->clear();static_cast<StatusLabel*>(saveStatus)->setGlyph({});
+    selectedLimit=history->maxUnpinned();
+    if(show) {
+        updateSettings();list->hide();empty->hide();layout()->activate();growSettings();presets->checkedButton()->setFocus();
+    } else {
+        resizeInternally(listSize);refresh();search->setFocus();
+    }
+    update();
+}
+void Panel::growSettings() {
+    if(!settingsVisible)return;
+    const int needed=header->height()+settingsPage->layout()->totalHeightForWidth(width())+layout()->contentsMargins().bottom();
+    if(height()<needed)resizeInternally(QSize(width(),needed));
+}
+void Panel::updateSettings() {
+    const auto usage=history->usage();const int saved=history->maxUnpinned();
+    const QSignalBlocker blocker(presets);presets->button(selectedLimit)->setChecked(true);
+    for(auto *button:presets->buttons()) {button->setEnabled(!authorizationPending);button->setFocusPolicy(button->isChecked()?Qt::StrongFocus:Qt::ClickFocus);}
+    backButton->setEnabled(!authorizationPending);clearButton->setEnabled(!authorizationPending&&usage.unpinned>0);
+    saveButton->setEnabled(!authorizationPending&&selectedLimit!=saved);saveButton->setDefault(saveButton->isEnabled());
+    QString count=usage.unpinned==1?QStringLiteral("1 tarjeta"):QStringLiteral("%1 tarjetas").arg(usage.unpinned);
+    if(usage.pinned)count+=usage.pinned==1?QStringLiteral(" y 1 fijada"):QStringLiteral(" y %1 fijadas").arg(usage.pinned);
+    countLabel->setText(usage.unpinned||usage.pinned?QStringLiteral("Ahora: %1 · %2").arg(count,QLocale().formattedDataSize(usage.bytes,0,QLocale::DataSizeTraditionalFormat)):QStringLiteral("Ahora no hay tarjetas."));
+    const int removed=qMax(0,usage.unpinned-selectedLimit);
+    warningLabel->setVisible(removed>0);
+    warningLabel->setText((removed==1?QStringLiteral("Se borrará la tarjeta más antigua"):QStringLiteral("Se borrarán las %1 tarjetas más antiguas").arg(removed))+(usage.pinned?QStringLiteral("; los fijados se conservan."):QStringLiteral(".")));
+    // Recompute idle texts so they track the selection and live usage; outcomes stay.
+    if(saveStatus->text().startsWith(QStringLiteral("De ")))saveStatus->clear();
+    if(clearStatus->text().startsWith(QStringLiteral("Solo "))||clearStatus->text()==QStringLiteral("No hay tarjetas para borrar."))clearStatus->clear();
+    if(saveStatus->text().isEmpty()&&selectedLimit!=saved)saveStatus->setText(QStringLiteral("De %1 a %2").arg(saved).arg(selectedLimit));
+    if(clearStatus->text().isEmpty())clearStatus->setText(usage.unpinned?QStringLiteral("Solo en este panel; conserva los fijados."):QStringLiteral("No hay tarjetas para borrar."));
+    auto statusPalette=[&](QLabel *label,bool neutral) {QPalette p=palette();if(neutral)p.setColor(QPalette::WindowText,palette().color(QPalette::Disabled,QPalette::Text));label->setPalette(p);};
+    statusPalette(saveStatus,saveStatus->text().startsWith(QStringLiteral("De "))||saveStatus->text()==QStringLiteral("Esperando la contraseña…"));
+    statusPalette(clearStatus,clearStatus->text().startsWith(QStringLiteral("Solo "))||clearStatus->text()==QStringLiteral("No hay tarjetas para borrar.")||clearStatus->text()==QStringLiteral("Esperando la contraseña…"));
+    if(settingsVisible){settingsPage->layout()->invalidate();layout()->activate();growSettings();}
+}
+void Panel::requestClear() {if(clearButton->isEnabled())requestAuthorization(false);}
+void Panel::requestSave() {if(saveButton->isEnabled())requestAuthorization(true);}
+void Panel::requestAuthorization(bool saving) {
     if(authorizationPending)return;
-    authorizationPending=true;clearButton->setEnabled(false);clearButton->setText(QStringLiteral("Autorizando…"));
+    savingLimit=saving;authorizationPending=true;
+    saveStatus->clear();clearStatus->clear();static_cast<StatusLabel*>(saveStatus)->setGlyph({});
+    (saving?saveStatus:clearStatus)->setText(QStringLiteral("Esperando la contraseña…"));updateSettings();setFocus();
     authorization=new QProcess(this);
-    connect(authorization,qOverload<int,QProcess::ExitStatus>(&QProcess::finished),this,[this](int code,QProcess::ExitStatus status){finishAuthorization(status==QProcess::NormalExit&&code==0);});
-    connect(authorization,&QProcess::errorOccurred,this,[this](QProcess::ProcessError){finishAuthorization(false);});
+    connect(authorization,qOverload<int,QProcess::ExitStatus>(&QProcess::finished),this,[this](int code,QProcess::ExitStatus status){finishAuthorization(status==QProcess::NormalExit?code:1);});
+    connect(authorization,&QProcess::errorOccurred,this,[this](QProcess::ProcessError){finishAuthorization(1);});
     // Include start time and uid to bind polkit's subject to this exact process.
     QFile stat(QStringLiteral("/proc/self/stat"));
-    if(!stat.open(QIODevice::ReadOnly)){finishAuthorization(false);return;}
+    if(!stat.open(QIODevice::ReadOnly)){finishAuthorization(1);return;}
     const QByteArray fields=stat.readAll();const auto values=fields.mid(fields.lastIndexOf(')')+2).split(' ');
-    if(values.size()<=19){finishAuthorization(false);return;}
+    if(values.size()<=19){finishAuthorization(1);return;}
     const QString subject=QStringLiteral("%1,%2,%3").arg(QCoreApplication::applicationPid()).arg(QString::fromLatin1(values[19])).arg(::getuid());
-    authorization->start(authorizationProgram,{QStringLiteral("--action-id"),QStringLiteral("org.local.clipboard-panel.clear-history"),QStringLiteral("--process"),subject,QStringLiteral("--allow-user-interaction")});
     auto *timeout=new QTimer(authorization);timeout->setSingleShot(true);
-    connect(timeout,&QTimer::timeout,this,[this]{if(authorizationPending)finishAuthorization(false);});timeout->start(120000);
+    connect(timeout,&QTimer::timeout,this,[this]{if(authorizationPending)finishAuthorization(1);});timeout->start(120000);
+    authorization->start(authorizationProgram,{QStringLiteral("--action-id"),saving?QStringLiteral("org.local.clipboard-panel.change-limit"):QStringLiteral("org.local.clipboard-panel.clear-history"),QStringLiteral("--process"),subject,QStringLiteral("--allow-user-interaction")});
 }
-void Panel::finishAuthorization(bool authorized) {
+void Panel::finishAuthorization(int result) {
     if(!authorizationPending)return;
     authorizationPending=false;
     auto *process=authorization;authorization=nullptr;
     process->disconnect(this);process->setParent(qApp);
+    if(auto *timeout=process->findChild<QTimer*>())timeout->stop();
     if(process->state()!=QProcess::NotRunning)process->kill();
     // Reap asynchronously; never wait for a child in the GUI thread.
     if(process->state()==QProcess::NotRunning)process->deleteLater();
     else connect(process,qOverload<int,QProcess::ExitStatus>(&QProcess::finished),process,&QObject::deleteLater);
-    const bool cleared=authorized&&history->clear();
-    clearButton->setEnabled(true);clearButton->setText(cleared?QStringLiteral("Borrar todo"):QStringLiteral("No se borró"));
-    if(cleared)refresh(true);
-    else QTimer::singleShot(2500,this,[this]{if(!authorizationPending)clearButton->setText(QStringLiteral("Borrar todo"));});
+    if(savingLimit) {
+        const int removed=result==0?history->setMaxUnpinned(selectedLimit):-1;
+        selectedLimit=history->maxUnpinned();
+        if(result==0&&removed>=0) {
+            saveStatus->setText(removed==0?QStringLiteral("Guardado."):removed==1?QStringLiteral("Guardado; se borró 1."):QStringLiteral("Guardado; se borraron %1.").arg(removed));static_cast<StatusLabel*>(saveStatus)->setGlyph(QStringLiteral("check"));
+        } else saveStatus->setText((result==0||result==3?QStringLiteral("No se guardó; sigue en %1."):QStringLiteral("No se pudo autorizar; sigue en %1.")).arg(selectedLimit));
+    } else {
+        const bool cleared=result==0&&history->clear();
+        if(cleared)clearStatus->setText(history->usage().pinned?QStringLiteral("Borrado; los fijados se conservan."):QStringLiteral("Borrado."));
+        else {selectedLimit=history->maxUnpinned();clearStatus->setText(result==0||result==3?QStringLiteral("No se borró."):QStringLiteral("No se pudo autorizar."));}
+    }
+    refresh(true);updateSettings();
+    if(!savingLimit&&clearButton->isEnabled())clearButton->setFocus();else presets->checkedButton()->setFocus();
 }
 void Panel::refresh(bool selectNewest) {
     const QString selected=selectNewest?QString():currentId(); const int oldRow=list->currentRow(); const int scroll=list->verticalScrollBar()->value();
@@ -308,7 +422,7 @@ void Panel::refresh(bool selectNewest) {
     }
     if(list->count())list->setCurrentRow(selectNewest?0:selectedRow>=0?selectedRow:qBound(0,oldRow,list->count()-1));
     const bool hasItems=!delegate->entries.isEmpty();list->setVisible(hasItems);empty->setVisible(!hasItems);empty->setText(search->text().isEmpty()?QStringLiteral("No hay nada copiado"):QStringLiteral("Sin resultados"));
-    clearButton->setVisible(history->hasItems());
+    if(settingsVisible){list->hide();empty->hide();updateSettings();}
     layout()->activate();updateCardSizes();
     if(!selectNewest)list->verticalScrollBar()->setValue(scroll);
     update();
@@ -321,9 +435,17 @@ void Panel::paintEvent(QPaintEvent *) {
 }
 bool Panel::handleKey(QKeyEvent *e) {
     if(e->key()==Qt::Key_Escape) {
-        if(authorizationPending){finishAuthorization(false);return true;}
+        if(authorizationPending){finishAuthorization(3);return true;}
+        if(settingsVisible){showSettings(false);return true;}
         if(!search->text().isEmpty()){search->clear();}else emit dismissRequested(true);return true;
     }
+    if(settingsVisible) {
+        if(e->key()==Qt::Key_Return||e->key()==Qt::Key_Enter) {
+            if(!authorizationPending){if(clearButton->hasFocus())requestClear();else if(saveButton->isEnabled()&&(saveButton->hasFocus()||presets->buttons().contains(qobject_cast<QAbstractButton*>(focusWidget()))))requestSave();}return true;
+        }
+        return false;
+    }
+    if((e->key()==Qt::Key_Comma&&e->modifiers()==Qt::ControlModifier)||e->matches(QKeySequence::Preferences)){showSettings(true);return true;}
     if(e->key()==Qt::Key_Return||e->key()==Qt::Key_Enter){if(!currentId().isEmpty())emit chosen(currentId());return true;}
     if(e->key()==Qt::Key_Down||e->key()==Qt::Key_Up){if(list->count())list->setCurrentRow(qBound(0,list->currentRow()+(e->key()==Qt::Key_Down?1:-1),list->count()-1));if(list->currentItem())list->scrollToItem(list->currentItem());return true;}
     if((e->key()==Qt::Key_Home||e->key()==Qt::Key_End)&&search->text().isEmpty()){if(list->count()){list->setCurrentRow(e->key()==Qt::Key_Home?0:list->count()-1);list->scrollToItem(list->currentItem());}return true;}
@@ -348,12 +470,11 @@ bool Panel::eventFilter(QObject *obj,QEvent *e) {
         if(e->type()==QEvent::MouseButtonPress&&mouse->button()==Qt::LeftButton&&edges&&obj!=list->verticalScrollBar()) {
             resizing=windowHandle()&&windowHandle()->startSystemResize(edges);return true;
         }
-        if(e->type()==QEvent::MouseButtonPress&&mouse->button()==Qt::LeftButton&&!edges&&header->geometry().contains(position)&&!search->geometry().contains(header->mapFrom(this,position))&&!(clearButton->isVisible()&&clearButton->rect().contains(clearButton->mapFrom(this,position)))) {
+        if(e->type()==QEvent::MouseButtonPress&&mouse->button()==Qt::LeftButton&&!edges&&header->geometry().contains(position)&&!(search->isVisible()&&search->rect().contains(search->mapFrom(this,position)))&&!(settingsButton->isVisible()&&settingsButton->rect().contains(settingsButton->mapFrom(this,position)))&&!(backButton->isVisible()&&backButton->rect().contains(backButton->mapFrom(this,position)))) {
             if(windowHandle())windowHandle()->startSystemMove();return true;
         }
         if(e->type()==QEvent::MouseButtonRelease&&resizing) {resizing=false;return true;}
     }
-    if(obj==clearButton&&e->type()==QEvent::KeyPress&&(static_cast<QKeyEvent*>(e)->key()==Qt::Key_Return||static_cast<QKeyEvent*>(e)->key()==Qt::Key_Enter))return true;
     if(obj==search&&e->type()==QEvent::KeyPress) {
         auto *key=static_cast<QKeyEvent*>(e);
         if(key->key()==Qt::Key_PageUp||key->key()==Qt::Key_PageDown){QKeyEvent copy(key->type(),key->key(),key->modifiers(),key->text(),key->isAutoRepeat(),key->count());QCoreApplication::sendEvent(list,&copy);return true;}
@@ -387,7 +508,7 @@ bool Panel::event(QEvent *e) {
     if(e->type()==QEvent::MouseMove||e->type()==QEvent::MouseButtonPress||e->type()==QEvent::MouseButtonRelease) {
         if(eventFilter(this,e))return true;
     }
-    if(e->type()==QEvent::Hide&&authorizationPending)finishAuthorization(false);
+    if(e->type()==QEvent::Hide&&authorizationPending)finishAuthorization(3);
     if(e->type()==QEvent::WindowDeactivate&&isVisible()&&!authorizationPending)emit dismissRequested(false);
     return QWidget::event(e);
 }

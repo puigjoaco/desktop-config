@@ -151,14 +151,35 @@ bool History::merge(QVector<Item> incoming) {
         }
         if (!ok) break;
     }
-    if (ok) ok = enforceRetention();
+    if (ok) ok = enforceRetention(maxUnpinned());
     return finishTransaction(ok);
 }
-bool History::enforceRetention() {
-    // Pinned items never count toward the 100-item limit. Keep tombstones only.
-    return execute(QStringLiteral("UPDATE items SET hidden=1 WHERE hidden=0 AND pinned=0 AND id NOT IN (SELECT id FROM items WHERE hidden=0 AND pinned=0 ORDER BY added DESC, id DESC LIMIT 100)")) &&
+bool History::enforceRetention(int limit) {
+    // Pinned items never count toward the limit. Keep tombstones only.
+    return execute(QStringLiteral("UPDATE items SET hidden=1 WHERE hidden=0 AND pinned=0 AND id NOT IN (SELECT id FROM items WHERE hidden=0 AND pinned=0 ORDER BY added DESC, id DESC LIMIT ?)"), {limit}) &&
         execute(QStringLiteral("UPDATE items SET text='' WHERE hidden=1")) &&
         execute(QStringLiteral("DELETE FROM payloads WHERE id IN (SELECT id FROM items WHERE hidden=1)"));
+}
+
+int History::maxUnpinned() const {
+    QSqlQuery q(db);q.exec(QStringLiteral("SELECT value FROM settings WHERE key='maxUnpinned'"));
+    const int value=q.next()?q.value(0).toInt():100;
+    return QList<int>{50,100,200,500}.contains(value)?value:100;
+}
+History::Usage History::usage() const {
+    Usage result;QSqlQuery q(db);
+    if(q.exec(QStringLiteral("SELECT COALESCE(SUM(pinned=0),0),COALESCE(SUM(pinned<>0),0) FROM items WHERE hidden=0"))&&q.next()) {
+        result.unpinned=q.value(0).toInt();result.pinned=q.value(1).toInt();
+    }
+    if(q.exec(QStringLiteral("SELECT COALESCE(SUM(LENGTH(bytes)),0) FROM payloads JOIN items USING(id) WHERE hidden=0"))&&q.next())result.bytes=q.value(0).toLongLong();
+    return result;
+}
+int History::setMaxUnpinned(int limit) {
+    if(!QList<int>{50,100,200,500}.contains(limit)||!db.transaction())return -1;
+    const int before=usage().unpinned;
+    const bool ok=execute(QStringLiteral("INSERT OR REPLACE INTO settings VALUES('maxUnpinned',?)"),{limit})&&enforceRetention(limit);
+    const int removed=ok?before-usage().unpinned:0;
+    return finishTransaction(ok)?removed:-1;
 }
 
 QVector<Item> History::items(const QString &filter) const {
@@ -210,7 +231,7 @@ std::unique_ptr<QMimeData> History::choose(const QString &id) {
 }
 bool History::pin(const QString &id) {
     if (!db.transaction()) return false;
-    return finishTransaction(execute(QStringLiteral("UPDATE items SET pinned=NOT pinned WHERE id=? AND hidden=0"), {id}) && enforceRetention());
+    return finishTransaction(execute(QStringLiteral("UPDATE items SET pinned=NOT pinned WHERE id=? AND hidden=0"), {id}) && enforceRetention(maxUnpinned()));
 }
 bool History::remove(const QString &id) {
     if (!db.transaction()) return false;
