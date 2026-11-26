@@ -97,6 +97,9 @@ def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+MANAGED_LIMIT = "MaxClipItems=100\n"
+
+
 class KlipperConfig:
     """Edit only General/MaxClipItems, preserving other KConfig settings/comments."""
     def __init__(self, path):
@@ -126,16 +129,29 @@ class KlipperConfig:
                 key = index
         return group, key, end
 
+    @staticmethod
+    def long_enough(line):
+        value = re.fullmatch(r"MaxClipItems\s*=\s*(\d{1,9})", (line or "").strip())
+        return bool(value) and int(value.group(1)) >= 100
+
     def snapshot(self):
         lines = self.lines()
         group, key, _ = self.locate(lines)
+        line = lines[key] if key is not None else None
+        # "owned": install raises the limit (and rollback may restore it) only when it was shorter.
         return {"existed": self.path.exists(), "group_existed": group is not None,
-                "line": lines[key] if key is not None else None}
+                "line": line, "owned": not self.long_enough(line)}
 
     def write(self, original=None):
         lines = self.lines()
         group, key, end = self.locate(lines)
-        replacement = "MaxClipItems=100\n" if original is None else original["line"]
+        current = lines[key].strip() if key is not None else None
+        if original is None:
+            if self.long_enough(current):
+                return  # Raise a shorter history to 100, never shrink a longer one: shrinking discards entries.
+        elif not original.get("owned", True) or (current is not None and current != MANAGED_LIMIT.strip()):
+            return  # Never set by this installer, or changed later (e.g. Mattux): keep it.
+        replacement = MANAGED_LIMIT if original is None else original["line"]
         if key is not None:
             if replacement is None:
                 del lines[key]
@@ -352,10 +368,10 @@ def main():
         print("Build: heavy cmake --build <private scratch>/cmake --parallel 2")
         for rel in FILES:
             print("Managed file:", home / rel)
-        print("Klipper: record previous [General] MaxClipItems in ~/.config/klipperrc; set MaxClipItems=100; call org.kde.klipper /klipper org.kde.klipper.klipper reloadConfig.")
+        print("Klipper: record previous [General] MaxClipItems in ~/.config/klipperrc; set MaxClipItems=100 only if lower or unset (never lowered); call org.kde.klipper /klipper org.kde.klipper.klipper reloadConfig.")
         print("Polkit: sudo -n install -m 0644", source / POLICY, POLICY_DIRECTORY / POLICY)
         print("Polkit: auth_self for active users on EVERY Borrar todo; inactive/other sessions denied. Plasma handles the password.")
-        print("Uninstall/rollback: restore previous MaxClipItems (or remove the added key/file), reload Klipper; sudo -n remove only the policy installed by this installer.")
+        print("Uninstall/rollback: restore previous MaxClipItems (or remove the added key/file) unless it was changed since, reload Klipper; sudo -n remove only the policy installed by this installer.")
         print("Private backups + exact four-chord shortcut snapshot:", home / ".local/state/clipboard-panel")
         print("Read Meta+V owners; abort on any owner except plasmashell/show-on-mouse-pos and clipboard-panel/show-history.")
         print("Record both actions' current keys; remove ONLY Meta+V from plasmashell/show-on-mouse-pos.")

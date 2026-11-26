@@ -91,9 +91,11 @@ Primero comprueba quién tiene Meta+V y aborta si pertenece a otra acción disti
 a Klipper o a este panel. Antes de cambiar nada guarda los atajos completos de
 ambas acciones, los archivos anteriores y el estado del servicio en
 `~/.local/state/clipboard-panel/`. Conserva otros atajos y secuencias de varias
-teclas. Configura `[General] MaxClipItems=100` en `klipperrc` y pide a Klipper que relea
-su configuración mediante `reloadConfig`. Conserva el valor anterior y lo restaura
-al desinstalar o revertir un fallo, sin sobrescribir otros ajustes posteriores.
+teclas. Sube `[General] MaxClipItems` a 100 en `klipperrc` si era menor o no existía
+(nunca lo baja) y pide a Klipper que relea su configuración mediante `reloadConfig`.
+Conserva el valor anterior y lo restaura al desinstalar o revertir un fallo, salvo
+que el límite se haya cambiado después (por ejemplo desde Mattux), sin sobrescribir
+otros ajustes posteriores.
 El panel guarda copias propias de los MIME: una expulsión de Klipper no elimina
 los datos ya importados. Se conservan las últimas 100 tarjetas no fijadas; los
 fijados no cuentan y nunca se expulsan. Al desfijar se vuelve a aplicar el límite.

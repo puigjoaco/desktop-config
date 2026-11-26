@@ -156,6 +156,32 @@ class InstallerTest(unittest.TestCase):
                 self.assertFalse(installer.policy.exists())
                 self.assertEqual(config.read_text() if config.exists() else None, initial)
 
+    def test_klipper_limit_never_lowered_and_later_change_kept(self):
+        with tempfile.TemporaryDirectory() as home:
+            installer, binary, *_ = self.setup_install(home)
+            config = installer.klipper.path; config.parent.mkdir(parents=True, exist_ok=True)
+            config.write_text("[General]\nMaxClipItems=250\n")
+            installer.install(binary)
+            self.assertEqual(config.read_text(), "[General]\nMaxClipItems=250\n")
+            installer.uninstall()
+            self.assertEqual(config.read_text(), "[General]\nMaxClipItems=250\n")
+        with tempfile.TemporaryDirectory() as home:
+            installer, binary, *_ = self.setup_install(home)
+            config = installer.klipper.path; config.parent.mkdir(parents=True, exist_ok=True)
+            config.write_text("[General]\nMaxClipItems=200\n")
+            installer.install(binary)
+            config.write_text("[General]\nMaxClipItems=100\n")
+            installer.uninstall()
+            self.assertEqual(config.read_text(), "[General]\nMaxClipItems=100\n")
+        with tempfile.TemporaryDirectory() as home:
+            installer, binary, *_ = self.setup_install(home)
+            config = installer.klipper.path; config.parent.mkdir(parents=True, exist_ok=True)
+            config.write_text("[General]\nMaxClipItems=20\n")
+            installer.install(binary)
+            config.write_text("[General]\nMaxClipItems=200\n")
+            installer.uninstall()
+            self.assertEqual(config.read_text(), "[General]\nMaxClipItems=200\n")
+
     def test_config_restore_preserves_unrelated_later_settings(self):
         with tempfile.TemporaryDirectory() as home:
             installer, binary, *_ = self.setup_install(home);installer.install(binary)
