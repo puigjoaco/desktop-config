@@ -4,7 +4,8 @@ A local Sunshine build based on `v2026.914.233613` runs as `joaquin` in the
 **system** unit `sunshine-host.service`. In Plasma it creates a separate virtual
 display at the first Moonlight client's native resolution and refresh rate,
 captures it through KWin/PipeWire DMA-BUF, and encodes on the RTX 4090 with NVENC.
-Both physical monitors keep their modes and positions. KMS remains the startup
+The currently installed build uses extend mode. The prepared exclusive-mode
+update below has not been installed or live-tested. KMS remains the startup
 and pre-login fallback, with the same uinput keyboard and mouse. SDDM, boot
 configuration, autologin and KWallet were not changed. See
 [VERIFICATION.md](VERIFICATION.md) for measured results and remaining tests.
@@ -53,37 +54,128 @@ It preserves the original `/usr/bin/sunshine` and `sunshine.conf`. Rollback remo
 that drop-in and restarts the official host using the unchanged original config.
 Re-enable the test build with `./use-virtual-build.sh`.
 
-The test config enables `virtual_display = enabled` and
-`virtual_display_scale = 100`. A scale of 100 gives native pixel density; set
-150 or 200 in `sunshine-virtual.conf` for larger controls without changing the
-client's pixel dimensions, then restart only `sunshine-host.service`.
-The install script resets this copy to the original config plus these defaults.
+The installer now selects:
 
-The service retains `XDG_RUNTIME_DIR=/run/user/1000`, `WAYLAND_DISPLAY=wayland-0`
-and the existing user D-Bus/PipeWire addresses. Every real stream tries the
-user's current Wayland socket afresh. A `zkde_screencast_unstable_v1` connection
-owns a `Virtual-Sunshine-<pid>-<sequence>` output; KScreen configures only that
-output's scale and mode. Startup encoder probes never create virtual outputs.
-KWin creates outputs at 60 Hz initially, and virtual-only custom modes allow
-other refresh rates. Teardown closes the screencast connection; KWin removes
-the output and moves its windows back to enabled physical outputs.
+```ini
+virtual_display = enabled
+virtual_display_scale = 100
+virtual_display_mode = exclusive
+virtual_display_restore_delay = 5
+```
 
-A fresh launch or resume after disconnect creates a new output using that
-connection's requested mode. The existing network timeout (10 seconds) handles
-silent network loss; an explicitly closed control connection can clean up sooner.
-A disconnected app may still appear resumable in Moonlight even though its
-virtual monitor was removed. Simultaneous clients share one capture owner and
-the first client's mode; disconnect the previous client before switching devices.
+`extend` preserves the current extra-monitor behavior. `exclusive` saves the
+physical layout and windows, makes the virtual output primary, moves windows and
+Plasma desktop/panels to it, and makes physical outputs replicas of it. Every
+physical monitor stays enabled and powered on, showing the same desktop as the
+phone, scaled by KWin. Physical outputs stop being independent logical screens.
+Native client pixels and refresh are retained; scale 150 or 200 enlarges controls. This is the existing desktop seat and login.
+The installer resets the virtual config copy to these defaults. Existing live
+config is unchanged until the new build and helper are installed deliberately.
 
-This is an additional monitor in the existing Plasma session. The cursor is
-moved to it at stream start, but mouse and keyboard still share the local seat.
-Click its desktop/window before typing; existing windows may retain keyboard
-focus until then. There is no persistent rule forcing new application windows
-onto the virtual output: use KDE's Move to Screen action when an application's
-saved placement chooses a physical monitor. A new virtual output has wallpaper
-and no taskbar by default; Plasma's main panel remains on the physical monitor.
-Absolute mouse uses the virtual output's logical rectangle; native touch/pen
-remain disabled in this host config and were not tested.
+The recovery helper needs `python3-dbus`, `python3-gi`, `qdbus6`, and
+`kscreen-doctor`. The installer checks these and copies the source asset
+`../../Sunshine/src_assets/linux/assets/kwin-exclusive.py` and the built native
+`sunshine-kwin-output` helper into `/opt/sunshine-puig/share/sunshine/`. The
+virtual-build systemd drop-in adds its `restore` action as `ExecStopPost`, with a 60-second shutdown allowance.
+**Deploy both helpers and the drop-in together with the binary before enabling
+exclusive mode.** No change is made to SDDM or the pre-login KMS fallback.
+
+Before the first virtual output is created, an independent guardian writes and
+fsyncs `~/.local/state/sunshine/kwin-exclusive.json` (0600): connector modes,
+positions, scale, rotation, enabled status, priorities and replication sources,
+plus surviving windows' opaque IDs, output names, geometry and fullscreen/
+maximized/minimized states, and Plasma desktop/panel IDs and connector assignments.
+It records no window titles, widget contents or application data. The native
+helper configures replication through KWin output-management v2 (version 13+),
+using device UUIDs; `kscreen-doctor` exposes the state but cannot change it. The
+native helper sends no enable/disable or DPMS requests. A previously disabled
+connected physical output causes exclusive initialization to fall back, because
+this policy never disables a physical output, including during restoration.
+A temporary KWin script routes existing and new windows to the virtual
+desktop. Restore clears temporary replicas, restores original connector layout
+and Plasma assignments, then restores surviving windows and removes the virtual
+output. If exact output restore fails, it enables connected
+original outputs at preferred modes and retains the snapshot for retry.
+
+Disconnect starts a configurable grace period (five seconds by default) with
+the virtual output still alive and physical mirrors still enabled. A reconnect
+claims that same output and resizes its mode to the new request. This avoids a
+KWin hotplug transition, which can reload the remembered physical layout.
+Phone rotation therefore needs a client disconnect/reconnect with swapped
+physical dimensions; automatic Android reconnection is a separate client change.
+Sunshine exit/crash, initialization failure and emergency restore bypass grace.
+The independent guardian detects Sunshine's lost lifeline; `ExecStopPost` also
+covers crashes that kill the entire service process group. The original
+10-second `ping_timeout` still precedes capture teardown on silent network loss.
+Only one client at a time is supported. Closed windows cannot be recreated;
+custom tiling and hidden unmaximize geometry are limited by KWin's scripting API.
+
+KWin accepted virtual-source mirroring in the isolated test: both original
+connectors remained enabled while KScreen reported the virtual output as their
+replication source and Plasma exposed one logical desktop. Each physical monitor
+keeps its native mode/scale; portrait can produce aspect-ratio bars. The actual
+NVIDIA scanout/visual scaling still needs the supervised live check below.
+
+If mirroring is unavailable, the fallback leaves all physical monitors enabled
+and independent, temporarily moves their logical positions beyond the stream
+viewport, and routes windows and all panels to the virtual display. Physical
+monitors then retain their wallpaper desktops, including desktop icons/widgets;
+they show no application windows or panels after routing. Logs explicitly report
+`policy=mirror` or `policy=move`. Original positions are restored after grace.
+
+### Emergency restore
+
+Run from a local terminal or an existing SSH session as the desktop user. This
+also asks an active guardian to restore immediately; it does not restart any
+service:
+
+```sh
+XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-0 \
+DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus \
+/usr/bin/python3 /opt/sunshine-puig/share/sunshine/kwin-exclusive.py restore
+```
+
+Before deployment, substitute the source asset path above for the `/opt` path.
+Do not delete the snapshot while recovery is incomplete. It is deliberately
+retained if output, Plasma placement or visible window restoration cannot be
+verified. Snapshots from another boot/KWin session, or without valid session
+identity, are archived as `kwin-exclusive.stale-<id>.json` without applying them.
+Completed output recovery is recorded durably, so later retries cannot overwrite
+a newer monitor layout. When hardware is missing, degraded recovery brings
+panels/windows onto available physical outputs and keeps the original snapshot. If no
+snapshot exists, the command is a no-op, including before login.
+
+### Supervised live validation (not run yet)
+
+1. With the user present and a working SSH/local terminal, review/build the fork,
+   run focused and nested checks, then deliberately run `./use-virtual-build.sh`.
+   That installer restarts only Sunshine; it must be a separately authorized live
+   step. Confirm the deployed helper and `ExecStopPost` exist before connecting.
+2. Save read-only `kscreen-doctor -j` evidence outside Git. Open identifiable
+   test windows on both physical monitors, including normal, maximized and
+   fullscreen examples. Record their geometry and panel positions. Keep the
+   emergency command above ready in the SSH terminal.
+3. Connect the phone at 3120×1440. Check the panel/desktop and every test window
+   appear on the phone, the virtual screen is primary, and both physical outputs
+   are enabled and show scaled copies of the phone desktop. Confirm KScreen
+   `replicationSource` points to the virtual output for each. Check mouse, typing
+   and audio with the user.
+4. Disconnect and reconnect within five seconds at 1440×3120 (until the Android
+   change exists, request that resolution explicitly). Check there is one retained
+   virtual output resized to portrait, with both physical replicas still enabled.
+   Repeat portrait→landscape. Check readable, unclipped windows and native stream size.
+5. Disconnect for longer than five seconds after capture teardown. Compare modes,
+   positions, scale, rotation and priorities against the saved JSON, and verify
+   original window geometry and panel positions. Repeat a reconnect after grace
+   has expired to verify a fresh snapshot.
+6. In a separately agreed test window, exercise normal Sunshine stop and a
+   Sunshine crash; verify immediate original-layout/window restore and the service
+   recovery hook. Run the emergency command while streaming and verify it brings
+   the desk back immediately. If any step misbehaves, run that command first.
+   Roll back with `./rollback-virtual-build.sh` after the desk is restored.
+7. Separately validate a pre-login/reboot session only when the user authorizes
+   it. Before login, exclusive mode must do nothing and the KMS greeter path
+   remains available. Reconnect after login to enter the virtual desktop.
 
 Before login, the user's compositor and permission service are unavailable, so
 KMS streams physical DP-3 at its existing mode. The daemon keeps the same pairing
@@ -231,11 +323,9 @@ scanout. The custom build above implements session-only KWin/PipeWire capture;
 KMS cannot capture that virtual output. The official binary remains the
 physical-output fallback and does not have the new virtual-display option.
 
-Do not disable or DPMS-off the currently captured physical output for privacy:
-KMS needs its active framebuffer. Monitors currently remain on. With a working
-dummy/forced DRM output, physical-output disable/restore can be evaluated while
-capturing that independent output. Stretch-to-fill is an immediate client-side
-alternative if available, but distorts the desktop and is not native resizing.
+Physical monitors remain enabled and powered on. Exclusive mode uses scaled
+replicas of the virtual desktop; it never disables a connector or turns DPMS off.
+KMS still needs an active physical framebuffer for the pre-login fallback.
 
 ## Network
 

@@ -333,3 +333,165 @@ virtual output, KWin script, server or watcher remains. Temporary probe/test
 permission desktop files and the task screenshots were removed. The fork's
 ignored build directories and pinned submodule checkouts remain for review and
 rebuilding; no commits or pushes were made.
+
+## Exclusive mirrored desktop — prepared 2026-11-26, not deployed
+
+Changes are uncommitted in Sunshine (`feat/kwin-virtual-display`, base
+`6cd88313`) and this deployment repo. No service was restarted, no live output
+was reconfigured, no input was injected into the live seat, and nothing was
+installed into `/opt` or `/etc`. The live configuration remains unchanged.
+The prepared installer selects `virtual_display_mode = exclusive` with
+`virtual_display_restore_delay = 5`; the fork's compatibility default is `extend`.
+
+### Final mechanism and supported behavior
+
+The final policy **never disables a physical connector or sends DPMS-off**.
+KWin output-management v2 version 13+ accepts a virtual device UUID as the
+replication source of other enabled devices. A small native
+`sunshine-kwin-output` helper sets only replication and verifies its protocol
+readback. `kscreen-doctor` exposes `replicationSource` in JSON but has no setter.
+The guardian makes the virtual source primary and mirrors it onto the physical
+connectors. All physical modes and scales stay in place. KWin and Plasma expose
+one logical screen, so application windows, panels and the desktop belong to the
+virtual source. Physical monitors show scaled copies; real NVIDIA scanout and
+aspect-ratio fitting remain part of the supervised live check.
+
+If mirroring is unavailable, the fallback keeps physical outputs enabled at
+existing modes/scales, temporarily places their logical coordinates beyond the
+virtual viewport, and sends application windows and all panels to the virtual
+output. The original primary Plasma desktop follows it. Physical monitors retain
+wallpaper desktops, including desktop icons/widgets, without panels or
+application windows after routing. Logs identify `policy=mirror` or `policy=move`.
+Both paths were tested in headless KWin, including a deliberately missing native
+replication helper for the fallback.
+
+Before virtual creation, the independent Python guardian writes/fsyncs a 0600
+snapshot of connector modes, positions, scale, rotation, enabled status,
+priorities, replication source names, window opaque IDs/visible geometry/state,
+and Plasma desktop/panel IDs and connector assignments. It records no titles,
+widget contents or application data. A previously disabled connected original
+output causes exclusive initialization to fall back, because restoring it could
+otherwise require an explicit disable request.
+
+After capture ends the C++ lease retains the protocol-owned output for five
+seconds. A reconnect claims and resizes the same output, including landscape to
+portrait, while the physical replicas stay enabled. Removing/adding outputs can
+cause KWin to reload a remembered layout, so a retained output avoids that hotplug
+transition. Once grace expires, restore clears temporary replicas, restores the
+connector/Plasma layout and surviving window geometry, then releases the output.
+Normal exit and guardian/parent crashes bypass grace. The systemd drop-in's
+`ExecStopPost` covers a crash that kills the whole service group. Exact-restore
+failure enables preferred modes and retains the snapshot for retry. The manual
+emergency command and detailed live steps are in README.
+
+### Changed files
+
+Sunshine configuration and lifecycle wiring: `src/config.cpp`, `src/config.h`,
+`src/platform/linux/kwingrab.cpp`; new lease implementation
+`src/platform/linux/kwin_exclusive.cpp` and `.h`; guardian asset
+`src_assets/linux/assets/kwin-exclusive.py`; native replication tool
+`tools/kwin_output.cpp`; build/install wiring in
+`cmake/compile_definitions/linux.cmake`, `cmake/packaging/linux.cmake`, and
+`tests/CMakeLists.txt`; settings/recovery documentation in `docs/configuration.md`.
+
+Tests: `tests/unit/platform/linux/test_kwin_virtual.cpp`, new
+`tests/unit/platform/linux/test_kwin_exclusive.py`, and new nested harness/owner
+`tests/integration/linux/kwin_exclusive_nested.py` and `kwin_virtual_owner.c`.
+
+Deployment: `sunshine/use-virtual-build.sh`, `sunshine/rollback-virtual-build.sh`,
+`sunshine/sunshine-virtual-build.conf`, `sunshine/README.md`, and this verification
+record. The base official-package config and service unit remain unchanged.
+
+### Validation
+
+- `heavy cmake --build cmake-build-kwin --parallel 12 --target sunshine test_sunshine`:
+  passed; also builds and stages the new replication helper. Existing Boost
+  Process `wait_for` deprecation warnings remain.
+- Focused C++/NVENC/config checks: **17 passed**. Includes native portrait mode
+  validation and an actual display-free HEVC NVENC encode at 1440×3120, plus
+  existing probe suppression, fractional-refresh and scale checks.
+- Pure Python guardian tests: **11 passed**. Cover semantic mode IDs, scale and
+  priority readback, original replication identity, durable/private snapshots,
+  reconnect preservation, failed persistence, invalid snapshots, preferred-mode
+  fallback, no disable commands, and pre-login/no-snapshot restore without D-Bus
+  or a Wayland session.
+- `heavy python3 tests/integration/linux/kwin_exclusive_nested.py`: **passed**.
+  Private D-Bus, Wayland, PipeWire, Plasma and XDG state; two original outputs with
+  unequal positions, reversed primary and fractional scale. Tests prove enabled
+  physical replicas, one logical Plasma desktop/panel, retained-source resize
+  from 3120×1440 to 1440×3120, exact original layout and normal/maximized/fullscreen
+  window geometry restoration, parent EOF recovery, disk recovery after guardian
+  SIGKILL, active emergency restore, and the unavailable-replication fallback.
+- The nested run includes **3 C++ lease tests**: grace/ownership resume and final
+  expiration; recovery after killing the guardian; and immediate restore when an
+  active lease's process exits while its independent Wayland owner remains alive.
+- `git diff --check`, changed C/C++ clang-format checks, Python syntax checks and
+  installer/rollback shell syntax checks passed.
+
+Build and verification logs remain in Sunshine's ignored `cmake-build-kwin/`:
+`exclusive-build.log`, `exclusive-unit.log`, and `exclusive-nested.log`.
+The nested harness waits for its private Wayland socket and KWin D-Bus name
+before starting Qt display tools, guards later queries, and disables KCrash UI
+inside the isolated environment. Its temporary state and process groups are
+cleaned after each run. The implementation child did not run an authoritative
+review loop, commit or push.
+
+### Remaining live validation and limits
+
+The new binary/helper/drop-in are not installed. Read README's supervised live
+sequence before deployment: verify both physical screens stay enabled and mirror
+landscape/portrait, then verify grace expiration, exit/crash and emergency
+restore. The existing service and pre-login KMS path were not restarted or
+retested. Android rotation-triggered reconnect is a separate client change.
+
+Visible saved geometry and states are tested. Closed windows cannot be recreated;
+KWin scripting does not expose the hidden restore rectangle of a maximized or
+fullscreen window, nor a serializable custom tiling tree. Such application/tiling
+behavior can limit exact restoration; failures retain the snapshot. Missing or
+changed monitor hardware can require the preferred-mode fallback. Actual
+Moonlight input/audio and NVIDIA physical mirror scanout still need the live test.
+
+## Advisory review follow-up
+
+All five review IDs were addressed without deployment, service restarts or live
+monitor/input changes; changes remain uncommitted.
+
+- **A1 fixed:** versioned recovery records bind to the boot, KWin D-Bus owner and
+  Wayland socket identity. Legacy, corrupt and foreign-session records are
+  archived without applying them. A durable output-stage journal prevents
+  replaying modes/positions after completed or interrupted recovery. Directory
+  metadata is fsynced after snapshot archival/deletion as well as writes.
+- **A2 fixed:** restore resolves saved desktops/panels by containment ID, including
+  inactive containments, retries connector availability with a bounded timeout,
+  then verifies every assignment. Mismatches retain the snapshot while surviving
+  windows are still restored. Retained Sunshine outputs are parked outside the
+  physical viewport: otherwise Plasma can classify an overlapping restored
+  connector as redundant and never expose it through `screenForConnector`.
+- **A3 fixed:** preferred-mode fallback selects an available physical primary,
+  moves panels/desktop and surviving windows onto available physical outputs,
+  verifies that window migration, and retains the original recovery record.
+- **B1 fixed:** both helper assets are staged by a test target after
+  `SUNSHINE_TEST_RUNTIME_DIR` is defined. A non-default runtime directory was
+  configured and both staged files were checked against their source/build
+  hashes; the build configuration was then reset to its original runtime path.
+- **B2 fixed:** an isolated test uses actual `kwin_display()` system-memory
+  capture, releases the landscape display, resumes the same retained screencast
+  at portrait resolution, receives portrait PipeWire frames and verifies final
+  output removal. The existing test hook explicitly clears the platform input
+  handle before platform setup, so cursor positioning cannot reach uinput. The
+  private PipeWire instance uses WirePlumber's policy-only profile, which loads
+  no audio/Bluetooth/camera hardware monitors. The test follows the production
+  capture reinit contract if PipeWire initially advertises the previous format.
+
+Final verification: **19 Python tests passed**, **17 focused C++/NVENC/config
+checks passed**, and the expanded nested suite passed with **exit 0**, including
+three lease tests, the real capture reconnect test, missing-Plasma recovery,
+newer-layout preservation, foreign-boot archival and unplugged-monitor degraded
+recovery. Test servers use their own process groups for deterministic cleanup.
+Syntax, clang-format and diff whitespace checks passed.
+
+Logs: Sunshine's ignored `cmake-build-kwin/exclusive-review-fixes-build.log`,
+`exclusive-review-fixes-python.log`, `exclusive-review-fixes-unit.log`,
+`exclusive-review-fixes-nested.log`, and `exclusive-staging-*.log`.
+No authoritative publishing review, commit, push or live supervised validation
+was performed by this implementation child.
