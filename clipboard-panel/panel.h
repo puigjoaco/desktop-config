@@ -7,6 +7,7 @@ class QPushButton;
 class QLabel;
 class QKeyEvent;
 class QProcess;
+class QAction;
 namespace Clip {
 class Panel final : public QWidget {
     Q_OBJECT
@@ -28,6 +29,7 @@ protected:
 private:
     bool handleKey(QKeyEvent *event);
     Qt::Edges resizeEdges(const QPoint &position) const;
+    void applyStyle();
     void updateCardSizes();
     void queueCardSizes();
     void resizeInternally(const QSize &size);
@@ -35,10 +37,11 @@ private:
     void finishAuthorization(bool authorized);
     History *history;
     QListWidget *list = nullptr;
-    QWidget *header;
-    QLineEdit *search;
-    QPushButton *clearButton;
-    QLabel *empty;
+    QWidget *header = nullptr;
+    QLineEdit *search = nullptr;
+    QAction *searchIcon = nullptr;
+    QPushButton *clearButton = nullptr;
+    QLabel *empty = nullptr;
     QString settingsFile;
     QString authorizationProgram;
     QProcess *authorization = nullptr;

@@ -3,6 +3,7 @@
 #include <QDir>
 #include <QFile>
 #include <QScrollBar>
+#include <QScopeGuard>
 #include <QLineEdit>
 #include <QListWidget>
 #include <QPainter>
@@ -10,6 +11,8 @@
 #include <QProcess>
 #include <QSignalSpy>
 #include <QSettings>
+#include <QStyleFactory>
+#include <QStyleOptionSlider>
 #include <QStandardPaths>
 #include <QTemporaryDir>
 #include <QtTest>
@@ -29,13 +32,68 @@ class PanelTest:public QObject {
 private slots:
     void navigationAndChoose() {
         QTemporaryDir dir;History history(dir.path());QVERIFY(history.merge(examples()));Panel panel(&history,dir.filePath("panelrc"));panel.prepareOpen();panel.show();
-        auto *list=panel.findChild<QListWidget*>("history");QSignalSpy choose(&panel,&Panel::chosen),dismiss(&panel,&Panel::dismissRequested);
-        QCOMPARE(panel.currentId(),QString("g"));QTest::keyClick(list,Qt::Key_Down);QCOMPARE(panel.currentId(),QString("f"));
-        QTest::keyClick(list,Qt::Key_Return);QCOMPARE(choose.size(),1);QCOMPARE(choose[0][0].toString(),QString("f"));QCOMPARE(history.items().first().id,QString("g"));
-        QTest::keyClicks(list,"p");auto *search=panel.findChild<QLineEdit*>("filter");QTest::keyClicks(search,"an");QCOMPARE(panel.filter(),QString("pan"));QCOMPARE(list->count(),2);
-        QTest::keyClick(search,Qt::Key_Escape);QVERIFY(panel.filter().isEmpty());QCOMPARE(dismiss.size(),0);
-        QTest::keyClick(list,Qt::Key_Escape);QCOMPARE(dismiss.size(),1);QVERIFY(dismiss[0][0].toBool());
-        panel.prepareOpen();QTest::keyClick(list,Qt::Key_P,Qt::ControlModifier);QVERIFY(history.items().first().pinned);QTest::keyClick(list,Qt::Key_Delete);QCOMPARE(list->count(),6);
+        auto *list=panel.findChild<QListWidget*>("history");auto *search=panel.findChild<QLineEdit*>("filter");QApplication::processEvents();QVERIFY(search->isVisible());QVERIFY(search->hasFocus());QSignalSpy choose(&panel,&Panel::chosen),dismiss(&panel,&Panel::dismissRequested);
+        QCOMPARE(panel.currentId(),QString("g"));QTest::keyClick(search,Qt::Key_Down);QCOMPARE(panel.currentId(),QString("f"));
+        QTest::keyClick(search,Qt::Key_Return);QCOMPARE(choose.size(),1);QCOMPARE(choose[0][0].toString(),QString("f"));QCOMPARE(history.items().first().id,QString("g"));
+        QTest::keyClicks(search,"pan");QCOMPARE(panel.filter(),QString("pan"));QCOMPARE(list->count(),2);
+        QTest::keyClick(search,Qt::Key_Escape);QVERIFY(panel.filter().isEmpty());QVERIFY(search->hasFocus());QCOMPARE(panel.currentId(),QString("g"));QCOMPARE(dismiss.size(),0);
+        QTest::keyClick(search,Qt::Key_Escape);QCOMPARE(dismiss.size(),1);QVERIFY(dismiss[0][0].toBool());
+        panel.prepareOpen();QTest::keyClick(search,Qt::Key_P,Qt::ControlModifier);QVERIFY(history.items().first().pinned);QTest::keyClick(search,Qt::Key_Delete);QCOMPARE(list->count(),6);
+    }
+    void searchEditingAndNavigation() {
+        QTemporaryDir dir;History history(dir.path());QVERIFY(history.merge(examples()));Panel panel(&history,dir.filePath("panelrc"));panel.prepareOpen();panel.show();QApplication::processEvents();panel.resize(560,400);QApplication::processEvents();
+        auto *search=panel.findChild<QLineEdit*>("filter");auto *list=panel.findChild<QListWidget*>("history");
+        QTest::keyClick(search,Qt::Key_Up);QCOMPARE(panel.currentId(),QString("g"));
+        QTest::keyClick(search,Qt::Key_End);QCOMPARE(panel.currentId(),QString("a"));QVERIFY(list->verticalScrollBar()->value()>0);
+        QTest::keyClick(search,Qt::Key_Down);QCOMPARE(panel.currentId(),QString("a"));
+        QTest::keyClick(search,Qt::Key_Home);QCOMPARE(panel.currentId(),QString("g"));QCOMPARE(list->verticalScrollBar()->value(),0);
+        QTest::keyClick(search,Qt::Key_PageDown);QVERIFY(list->currentRow()>0);
+        QTest::keyClick(search,Qt::Key_PageUp);QCOMPARE(panel.currentId(),QString("g"));
+        QTest::keyClick(search,Qt::Key_Tab);QVERIFY(search->hasFocus());QTest::keyClick(search,Qt::Key_Backtab);QVERIFY(search->hasFocus());
+        QTest::keyClicks(search,"pan");QCOMPARE(list->count(),2);QCOMPARE(list->verticalScrollBar()->value(),0);
+        const QString selected=panel.currentId();QTest::keyClick(search,Qt::Key_P,Qt::ControlModifier);QVERIFY(history.items("pan").first().pinned);QCOMPARE(panel.currentId(),selected);
+        QTest::keyClick(search,Qt::Key_Home);QCOMPARE(search->cursorPosition(),0);QCOMPARE(panel.currentId(),selected);
+        QTest::keyClick(search,Qt::Key_Delete);QCOMPARE(panel.filter(),QString("an"));QCOMPARE(history.items().size(),7);
+        QTest::keyClick(search,Qt::Key_End);QCOMPARE(search->cursorPosition(),2);QTest::keyClick(search,Qt::Key_Backspace);QCOMPARE(panel.filter(),QString("a"));
+        QTest::keyClick(search,Qt::Key_A,Qt::ControlModifier);QTest::keyClicks(search,"no-match");QCOMPARE(list->count(),0);
+        QSignalSpy choose(&panel,&Panel::chosen);QTest::keyClick(search,Qt::Key_Return);QCOMPARE(choose.size(),0);
+        panel.prepareOpen();QVERIFY(panel.filter().isEmpty());QVERIFY(search->hasFocus());QCOMPARE(panel.currentId(),QString("g"));
+    }
+    void scrollbarDragAcrossGutterAndReleaseInResizeBorder() {
+        QTemporaryDir dir;History history(dir.path());QVERIFY(history.merge(examples()));Panel panel(&history,dir.filePath("panelrc"));panel.prepareOpen();panel.show();QApplication::processEvents();panel.resize(560,300);QApplication::processEvents();QApplication::processEvents();
+        auto *search=panel.findChild<QLineEdit*>("filter");auto *list=panel.findChild<QListWidget*>("history");auto *bar=list->verticalScrollBar();
+        QVERIFY(bar->isVisible());QCOMPARE(bar->width(),14);QVERIFY(bar->maximum()>0);
+        for(int x:{0,6,13}) {
+            bar->setValue(0);QStyleOptionSlider option;option.initFrom(bar);option.orientation=Qt::Vertical;option.minimum=bar->minimum();option.maximum=bar->maximum();option.pageStep=bar->pageStep();option.sliderPosition=bar->sliderPosition();option.sliderValue=bar->value();
+            const QRect handle=bar->style()->subControlRect(QStyle::CC_ScrollBar,&option,QStyle::SC_ScrollBarSlider,bar);
+            const QPoint press(x,handle.center().y());QTest::mousePress(bar,Qt::LeftButton,Qt::NoModifier,press);QVERIFY(bar->isSliderDown());QVERIFY(search->hasFocus());
+            const QPoint outside=bar->mapFrom(&panel,QPoint(panel.width()-2,bar->mapTo(&panel,press).y()+40));
+            QMouseEvent move(QEvent::MouseMove,outside,bar->mapToGlobal(outside),Qt::NoButton,Qt::LeftButton,Qt::NoModifier);QApplication::sendEvent(bar,&move);QVERIFY(bar->value()>0);
+            QTest::mouseRelease(bar,Qt::LeftButton,Qt::NoModifier,outside);QVERIFY(!bar->isSliderDown());QVERIFY(search->hasFocus());
+        }
+    }
+    void emptyHistoryKeepsSearch() {
+        QTemporaryDir dir;History history(dir.path());Panel panel(&history,dir.filePath("panelrc"));panel.prepareOpen();panel.show();QApplication::processEvents();
+        auto *search=panel.findChild<QLineEdit*>("filter");QVERIFY(search->isVisible());QVERIFY(search->isEnabled());QVERIFY(search->hasFocus());QVERIFY(panel.findChild<QPushButton*>("clearAll")->isHidden());
+        QTest::keyClicks(search,"absent");QCOMPARE(panel.filter(),QString("absent"));QTest::keyClick(search,Qt::Key_Escape);QVERIFY(panel.filter().isEmpty());QVERIFY(search->hasFocus());
+    }
+    void paletteChangesKeepListBackgroundInSync() {
+        const QPalette original=qApp->palette();auto restore=qScopeGuard([&]{qApp->setPalette(original);});
+        QTemporaryDir dir;History history(dir.path());QVERIFY(history.merge(examples()));Panel panel(&history,dir.filePath("panelrc"));panel.prepareOpen();panel.show();QApplication::processEvents();
+        auto *list=panel.findChild<QListWidget*>("history");
+        for(const auto color:{QColor("#202326"),QColor("#eff0f1")}) {
+            QPalette theme=original;theme.setColor(QPalette::Window,color);qApp->setPalette(theme);QApplication::processEvents();
+            QCOMPARE(panel.palette().color(QPalette::Window),color);QCOMPARE(list->palette().color(QPalette::Base),color);QCOMPARE(list->viewport()->palette().color(QPalette::Base),color);
+        }
+    }
+    void cardActionsRespectTopInsetAndKeepSearchFocus() {
+        QTemporaryDir dir;History history(dir.path());QVERIFY(history.merge(examples()));Panel panel(&history,dir.filePath("panelrc"));panel.prepareOpen();panel.show();QApplication::processEvents();
+        auto *list=panel.findChild<QListWidget*>("history");auto *search=panel.findChild<QLineEdit*>("filter");QSignalSpy choose(&panel,&Panel::chosen);
+        QTest::mouseClick(list->viewport(),Qt::LeftButton,Qt::NoModifier,QPoint(20,3));QCOMPARE(choose.size(),0);
+        const QRect first=list->visualItemRect(list->item(0)).adjusted(0,8,-1,-6);
+        QTest::mouseClick(list->viewport(),Qt::LeftButton,Qt::NoModifier,first.center());QCOMPARE(choose.size(),1);QCOMPARE(choose[0][0].toString(),QString("g"));QVERIFY(search->hasFocus());
+        QTest::mouseClick(list->viewport(),Qt::LeftButton,Qt::NoModifier,QPoint(first.right()-17,first.top()+18));QVERIFY(history.items().first().pinned);QVERIFY(search->hasFocus());
+        QTest::mouseClick(list->viewport(),Qt::LeftButton,Qt::NoModifier,QPoint(first.right()-47,first.top()+18));QCOMPARE(history.items().size(),6);QVERIFY(search->hasFocus());
     }
     void sizePersistenceAndScreenClamping() {
         QTemporaryDir dir;History history(dir.path());QVERIFY(history.merge(examples()));
@@ -106,7 +164,7 @@ private slots:
         QTemporaryDir dir;History history(dir.path());QVERIFY(history.merge(examples()));const auto program=dir.filePath("pkcheck-fake");
         QFile script(program);QVERIFY(script.open(QIODevice::WriteOnly));script.write("#!/bin/sh\nexec sleep 10\n");script.close();QVERIFY(script.setPermissions(QFile::ReadOwner|QFile::WriteOwner|QFile::ExeOwner));
         Panel panel(&history,dir.filePath("panelrc"),program);panel.prepareOpen();panel.show();QApplication::processEvents();QSignalSpy dismiss(&panel,&Panel::dismissRequested);
-        auto *button=panel.findChild<QPushButton*>("clearAll");QTest::mouseClick(button,Qt::LeftButton);QVERIFY(!button->isEnabled());QTest::keyClick(&panel,Qt::Key_Escape);QVERIFY(button->isEnabled());QCOMPARE(history.items().size(),7);QCOMPARE(dismiss.size(),0);
+        auto *button=panel.findChild<QPushButton*>("clearAll");QTest::mouseClick(button,Qt::LeftButton);QVERIFY(!button->isEnabled());QTest::keyClick(panel.findChild<QLineEdit*>("filter"),Qt::Key_Escape);QVERIFY(button->isEnabled());QCOMPARE(history.items().size(),7);QCOMPARE(dismiss.size(),0);
         QTRY_VERIFY(qApp->findChildren<QProcess*>().isEmpty());
     }
     void offscreenRenders() {
@@ -126,19 +184,33 @@ private slots:
             {QPalette::Link,"Colors:Window","ForegroundLink"}};
         for(const auto &[role,group,key]:roles)palette.setColor(role,color(group,key,palette.color(role)));
         palette.setColor(QPalette::Disabled,QPalette::Text,color("Colors:Window","ForegroundInactive",palette.color(QPalette::Disabled,QPalette::Text)));
-        qApp->setPalette(palette);
+        palette.setColor(QPalette::PlaceholderText,palette.color(QPalette::Disabled,QPalette::Text));qApp->setPalette(palette);
         QVERIFY(QDir().mkpath(output));QTemporaryDir dir;History history(dir.path());QVERIFY(history.merge(examples()));QVERIFY(history.choose("f"));Panel panel(&history,dir.filePath("panelrc"));panel.prepareOpen();panel.show();QApplication::processEvents();
         auto render=[&](const QString &name){QApplication::processEvents();QImage image(panel.size()*2,QImage::Format_ARGB32_Premultiplied);image.setDevicePixelRatio(2);image.fill(Qt::transparent);panel.render(&image);QVERIFY(image.save(QDir(output).filePath(name+".png")));};
         panel.prepareOpen(QRect(0,0,1600,1000));panel.resize(420,400);render("resize-420x400");
         panel.resize(800,700);render("resize-800x700");
         render("normal-selected");auto *list=panel.findChild<QListWidget*>("history");list->clearSelection();render("normal-hoverless");list->setCurrentRow(1);render("selected-image");
-        QTest::keyClicks(list,"p");auto *search=panel.findChild<QLineEdit*>("filter");QTest::keyClicks(search,"an");render("filter");search->setText("no-existe");render("filter-empty");search->clear();panel.prepareOpen();
+        auto *search=panel.findChild<QLineEdit*>("filter");QTest::keyClicks(search,"pan");render("filter");search->setText("no-existe");render("filter-empty");search->clear();panel.prepareOpen();
+        panel.resize(560,700);
+        const QPalette desktopPalette=qApp->palette();
+        for(bool dark:{true,false}) {
+            QPalette theme=desktopPalette;
+            theme.setColor(QPalette::Window,QColor(dark?"#202326":"#eff0f1"));theme.setColor(QPalette::WindowText,QColor(dark?"#fcfcfc":"#232629"));
+            theme.setColor(QPalette::Base,QColor(dark?"#141618":"#ffffff"));theme.setColor(QPalette::Text,QColor(dark?"#fcfcfc":"#232629"));
+            theme.setColor(QPalette::Button,QColor(dark?"#292c30":"#fcfcfc"));theme.setColor(QPalette::ButtonText,theme.color(QPalette::Text));
+            theme.setColor(QPalette::Highlight,QColor("#3daee9"));theme.setColor(QPalette::Link,QColor(dark?"#1d99f3":"#2980b9"));
+            theme.setColor(QPalette::Disabled,QPalette::Text,QColor(dark?"#a1a9b1":"#707d8a"));theme.setColor(QPalette::PlaceholderText,theme.color(QPalette::Disabled,QPalette::Text));
+            qApp->setPalette(theme);QApplication::processEvents();panel.prepareOpen();render(dark?"dark-default":"light-default");
+            QTest::keyClicks(search,"pan");render(dark?"dark-searching":"light-searching");search->setText("no-existe");render(dark?"dark-no-results":"light-no-results");
+        }
+        qApp->setPalette(desktopPalette);panel.prepareOpen();
         for(const auto &item:history.items())history.remove(item.id);panel.refresh(true);render("empty");
     }
 };
 int main(int argc,char **argv) {
     qputenv("QT_QPA_PLATFORM","offscreen");
     QApplication app(argc,argv);
+    if(QStyleFactory::keys().contains("Breeze",Qt::CaseInsensitive))QApplication::setStyle("Breeze");
     PanelTest test;return QTest::qExec(&test,argc,argv);
 }
 #include "panel-test.moc"

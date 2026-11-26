@@ -12,9 +12,14 @@ resuelven por el identificador estable. Una copia idéntica mantiene su posició
 original, incluso si Klipper la había expulsado. Si un archivo de Klipper todavía
 no terminó de guardarse, se vuelve a intentar sin cambiar la fecha original.
 
-- ↑ / ↓: recorrer tarjetas. Enter o clic: elegir y cerrar.
-- Supr: eliminar la tarjeta seleccionada. Ctrl+P: fijar o desfijar.
-- Escribir: filtrar. Esc borra el filtro; otro Esc cierra.
+- La búsqueda «Buscar…» siempre está visible y mantiene el foco. Escribir filtra al instante.
+- ↑ / ↓: recorrer tarjetas; RePág / AvPág: avanzar por páginas. Enter o clic: elegir y cerrar.
+- Inicio / Fin: primera / última tarjeta si la búsqueda está vacía; con texto, mover el cursor.
+- Supr: eliminar la tarjeta seleccionada si la búsqueda está vacía; con texto, borrar hacia delante.
+  Ctrl+P: fijar o desfijar, también al filtrar. Tab y Mayús+Tab mantienen el foco en la búsqueda.
+- Esc borra el filtro; otro Esc cierra. Durante la autorización de polkit, Esc la cancela.
+- Arrastrar la fila del título: mover la ventana durante esa apertura. La posición no se guarda;
+  cada Meta+V vuelve a abrir junto al puntero.
 - Arrastrar cualquier borde o esquina: cambiar el tamaño; se recuerda al reabrir y reiniciar.
 - Borrar todo: solicita tu contraseña de Linux mediante el agente de polkit de Plasma.
   Cancelar o fallar la autorización no borra nada; los fijados siempre se conservan.
@@ -45,7 +50,9 @@ Al redimensionarla, conserva ancho y alto en `~/.config/clipboard-panelrc`
 (o `$XDG_CONFIG_HOME/clipboard-panelrc`); el historial pasa a desplazarse dentro
 de ese tamaño. Al abrir, se limita al área disponible del monitor del puntero.
 Las tarjetas, el texto y las miniaturas se adaptan al ancho; las miniaturas no
-superan 200 px de alto. No utiliza layer-shell.
+superan 200 px de alto. La barra de desplazamiento tiene un área de agarre de 14 px;
+el indicador se ensancha al pasar el puntero y se resalta al arrastrar. Los colores
+se actualizan al cambiar la paleta del sistema. No utiliza layer-shell.
 Un script transitorio de KWin recuerda la ventana activa, coloca únicamente el
 panel en el monitor del puntero y lo excluye de la barra de tareas y Alt+Tab.
 Al elegir o cerrar con Esc, intenta devolver el foco a la ventana anterior.
@@ -120,11 +127,12 @@ privado y los respaldos. Para cerrar solo el panel/servicio durante una prueba:
 recuperar Klipper hay que desinstalar. No cambiar atajos manualmente durante
 la prueba: al desinstalar se recupera la instantánea previa.
 
-## Prueba en vivo pendiente
+## Prueba interactiva pendiente
 
-No se ha ejecutado en el escritorio real. El posicionamiento, el foco, la
-integración con KGlobalAccel y pegar texto/imágenes deben verificarse con el
-usuario presente, después de la revisión del orquestador:
+Se verificaron la instalación, la apertura por D-Bus y el aspecto en una captura
+de solo lectura del escritorio real (26-11-2026), sin introducir teclas ni clics.
+El atajo Meta+V, el foco, los arrastres Wayland y pegar texto/imágenes deben
+verificarse con el usuario presente, después de la revisión del orquestador:
 
 1. Acordar una pausa. Mantener dos ventanas de destino abiertas (editor y editor
    de imágenes), con el escritorio y el monitor secundario visibles. Instalar con
@@ -142,10 +150,13 @@ usuario presente, después de la revisión del orquestador:
 5. Escribir un filtro; comprobar «Sin resultados», Esc para limpiar y otro Esc
    para cerrar. Probar fijar, borrar una tarjeta y Borrar todo: el fijado permanece
    en su posición. Reiniciar el servicio y confirmar que se conserva el historial.
+   Comprobar también RePág / AvPág y la edición del filtro con Inicio, Fin y Supr.
    El borrado afecta solo al panel; Klipper debe seguir disponible tras rollback.
 6. Cambiar el tamaño desde bordes y esquinas, cerrar y reabrir Meta+V y reiniciar
    el servicio: el tamaño elegido se conserva. Probar los límites en ambos
-   monitores y las tarjetas con un panel angosto y ancho.
+   monitores y las tarjetas con un panel angosto y ancho. Arrastrar la fila del título,
+   reabrir y confirmar que vuelve al puntero. Arrastrar la barra desde ambos extremos
+   de su ancho y soltar cerca del borde: debe dejar de arrastrar normalmente.
 7. Pulsar Borrar todo: verificar que el panel permanece abierto al aparecer el
    agente de polkit, cancelar y comprobar que no se borró nada. Repetir y autorizar:
    solo permanecen los fijados. Volver a pulsar: debe pedir contraseña otra vez.
