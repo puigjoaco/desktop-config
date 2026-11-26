@@ -8,7 +8,6 @@ Desktop tweaks for KDE Plasma 6 on Wayland, developed on Kubuntu 26.04. Fork of 
 | [Mattux](mattux/) | Tray icon with the stack count. Its menu pastes or clears the stack and sets the new-stack-after-paste option, clipboard history, every shortcut above, and an on/off switch. |
 | [Portapapeles](clipboard-panel/) | Meta+V opens a clipboard history panel with text and image cards in a stable order. Choosing a card copies it; you paste with Ctrl+V. |
 | [KWin rules](kwin/) | Keeps WhatsApp Companion in the tray only. |
-| [Sunshine](sunshine/) | Sunshine streaming host with a login-screen service and a virtual display. |
 
 ## Install
 
