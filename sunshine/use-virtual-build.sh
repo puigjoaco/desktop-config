@@ -9,6 +9,8 @@ guardian="$source_dir/../../Sunshine/src_assets/linux/assets/kwin-exclusive.py"
 output_tool="$(dirname -- "$binary")/sunshine-kwin-output"
 [[ -f $guardian ]] || { echo 'Missing exclusive-output guardian' >&2; exit 1; }
 [[ -x $output_tool ]] || { echo 'Missing built KWin replication helper' >&2; exit 1; }
+built_web="$(dirname -- "$binary")/assets/web"
+[[ -f $built_web/config.html ]] || { echo 'Missing built Web UI; build target web-ui first' >&2; exit 1; }
 # Fail before activation if the independent recovery helper cannot start.
 /usr/bin/python3 -c 'import dbus; from gi.repository import GLib'
 command -v kscreen-doctor >/dev/null
@@ -18,6 +20,8 @@ sudo -n install -d -m 0755 /opt/sunshine-puig/bin /opt/sunshine-puig/share/sunsh
 # Keep a private copy so rollback never relies on modified package files.
 [[ $(dpkg-query -W -f='${Version}' sunshine) == 2026.914.233613-1+ubuntu26.04 ]] || { echo 'Expected pinned official assets' >&2; exit 1; }
 sudo -n cp -a -- /usr/share/sunshine/. /opt/sunshine-puig/share/sunshine/
+# Overlay the tested fork UI, including its Linux virtual-display settings.
+sudo -n cp -a -- "$built_web/." /opt/sunshine-puig/share/sunshine/web/
 sudo -n install -m 0755 "$binary" /opt/sunshine-puig/bin/sunshine
 sudo -n install -m 0644 "$guardian" /opt/sunshine-puig/share/sunshine/kwin-exclusive.py
 sudo -n install -m 0755 "$output_tool" /opt/sunshine-puig/share/sunshine/sunshine-kwin-output
